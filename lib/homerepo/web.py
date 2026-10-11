@@ -1108,6 +1108,11 @@ def api_user_del(req, uid):
 
 
 # ====================================================================== статика
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+mimetypes.add_type("image/x-icon", ".ico")
+mimetypes.add_type("image/icns", ".icns")
+
+
 def static(req):
     if req.method not in ("GET", "HEAD"):
         raise HTTPError(405, "метод не поддерживается")
@@ -1124,7 +1129,7 @@ def static(req):
     with open(full, "rb") as f:
         data = f.read()
     ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
-    if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
+    if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml", "application/manifest+json"):
         ctype += "; charset=utf-8"
     if full.endswith(".js"):
         ctype = "application/javascript; charset=utf-8"
