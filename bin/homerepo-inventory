@@ -1,0 +1,4 @@
+#!/bin/sh
+# Динамический инвентарь Ansible из HomeRepo:  ansible -i /usr/local/bin/homerepo-inventory all -m ping
+# Нужны права root или членство в группе homerepo (чтение базы панели).
+exec /usr/local/bin/homerepo inventory "$@"

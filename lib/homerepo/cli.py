@@ -182,6 +182,80 @@ def cmd_token(a):
     return 0
 
 
+def _web_stub():
+    from . import web
+
+    class _A:
+        cfg = config.get()
+    web.APP = _A()
+    return web
+
+
+def cmd_inventory(a):
+    """Инвентарь Ansible из HomeRepo: homerepo inventory --list (динамический, JSON) или --ini."""
+    _web_stub()
+    from . import ansibleapi
+    c = con()
+    if a.host:
+        inv = ansibleapi.dynamic_inventory(c)
+        print(json.dumps(inv["_meta"]["hostvars"].get(a.host, {}), ensure_ascii=False, indent=1))
+        return 0
+    inv = ansibleapi.dynamic_inventory(c)
+    if a.ini:
+        hv = inv["_meta"]["hostvars"]
+        print("# инвентарь HomeRepo: %s" % time.strftime("%d.%m.%Y %H:%M"))
+        print("[all]")
+        for h, v in sorted(hv.items()):
+            print(" ".join([h] + ["%s=%s" % (k, v[k]) for k in ("ansible_host", "ansible_user", "ansible_connection") if v.get(k)]))
+        for g, d in sorted(inv.items()):
+            if g in ("_meta", "all", "ungrouped") or not isinstance(d, dict) or not d.get("hosts"):
+                continue
+            print("\n[%s]" % g)
+            for h in d["hosts"]:
+                print(h)
+        return 0
+    print(json.dumps(inv, ensure_ascii=False, indent=1))
+    return 0
+
+
+def cmd_playbook(a):
+    c = con()
+    if a.op == "list":
+        for r in c.execute("SELECT id, name, raw, source, updated FROM playbooks ORDER BY id"):
+            print("#%-4d %-40s %-5s %s %s" % (r["id"], r["name"][:40], "YAML" if r["raw"] else "", fmt_ts(r["updated"]),
+                                              r["source"] or ""))
+        return 0
+    if a.op == "import":
+        if not a.files:
+            print("укажите файлы .yml", file=sys.stderr)
+            return 2
+        import re
+        n = 0
+        for f in a.files:
+            path = os.path.abspath(f)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+            except OSError as e:
+                print("пропущен %s: %s" % (f, e), file=sys.stderr)
+                continue
+            src = "import:" + path
+            if not a.force and c.execute("SELECT 1 FROM playbooks WHERE source=?", (src,)).fetchone():
+                print("уже импортирован: %s" % path)
+                continue
+            m = re.search(r"^\s*-\s*name:\s*['\"]?(.+?)['\"]?\s*$", text, re.M)
+            name = a.name or (m.group(1) if m else os.path.splitext(os.path.basename(path))[0])
+            now = time.time()
+            c.execute("INSERT INTO playbooks(name, description, model, yaml, raw, source, created_by, created, updated_by, "
+                      "updated) VALUES(?,?,?,?,?,?,?,?,?,?)", (name[:120], "импортирован из %s" % path, None, text, 1, src,
+                                                               "cli", now, "cli", now))
+            db.audit(c, "cli", "localhost", "playbook_create", name[:120])
+            print("импортирован: %s → «%s»" % (path, name))
+            n += 1
+        return 0
+    return 2
+
+
 def main():
     ap = argparse.ArgumentParser(prog="homerepo", description="HomeRepo %s — управление репозиторием" % VERSION)
     sp = ap.add_subparsers(dest="cmd")
@@ -209,6 +283,15 @@ def main():
     t.add_argument("--multi", action="store_true", help="для нескольких хостов")
     t.add_argument("--note")
     sp.add_parser("repo-file", help="вывести .repo для клиентов")
+    iv = sp.add_parser("inventory", help="инвентарь Ansible из хостов HomeRepo (JSON для ansible -i, или --ini)")
+    iv.add_argument("--list", action="store_true", help="динамический инвентарь (по умолчанию)")
+    iv.add_argument("--host", help="переменные одного хоста")
+    iv.add_argument("--ini", action="store_true", help="в формате INI")
+    pbp = sp.add_parser("playbook", help="плейбуки: list | import FILE…")
+    pbp.add_argument("op", choices=["list", "import"])
+    pbp.add_argument("files", nargs="*")
+    pbp.add_argument("--name", help="название при импорте одного файла")
+    pbp.add_argument("--force", action="store_true", help="импортировать повторно")
     sp.add_parser("version")
     a = ap.parse_args()
     if not a.cmd:
@@ -230,6 +313,7 @@ def main():
         return 0
     handlers = {
         "status": cmd_status, "user": cmd_user, "jobs": cmd_jobs, "token": cmd_token,
+        "inventory": cmd_inventory, "playbook": cmd_playbook,
         "resign": simple_job("resign", {"all_foreign": True}, "переподписать чужие и неподписанные"),
         "rescan": simple_job("rescan", {}, "пересканировать репозиторий"),
         "metadata": simple_job("metadata", {}, "пересобрать метаданные всех веток"),

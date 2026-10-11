@@ -178,7 +178,7 @@ function showLogin(err, mustChange) {
 }
 
 /* ------------------------------------------------------------------ каркас */
-const NAV = [['packages', 'Пакеты'], ['signing', 'Подпись'], ['devices', 'Устройства'], ['scanner', 'Сканер'], ['assign', 'Назначения'], ['connect', 'Подключение'], ['log', 'Журнал'], ['users', 'Пользователи']];
+const NAV = [['packages', 'Пакеты'], ['signing', 'Подпись'], ['devices', 'Устройства'], ['scanner', 'Сканер'], ['assign', 'Назначения'], ['playbooks', 'Плейбуки'], ['connect', 'Подключение'], ['log', 'Журнал'], ['users', 'Пользователи']];
 
 function layout(active) {
   const nav = NAV.filter(([k]) => k !== 'users' || isAdmin()).map(([k, t]) => `<a href="#/${k}" class="${active === k ? 'on' : ''}">${t}</a>`).join('');
@@ -204,7 +204,8 @@ function route() {
   S.timers.forEach(clearInterval); S.timers = []; S.acts = { logout: doLogout, theme: toggleTheme, errors: showErrors }; S.on = {};
   const h = (location.hash || '#/packages').slice(2).split('/');
   const v = VIEWS[h[0]] || VIEWS.packages;
-  const main = layout(VIEWS[h[0]] ? (h[0] === 'device' ? 'devices' : h[0]) : 'packages');
+  const NAVMAP = { device: 'devices', playbook: 'playbooks', run: 'playbooks' };
+  const main = layout(VIEWS[h[0]] ? (NAVMAP[h[0]] || h[0]) : 'packages');
   v(main, h[1]).catch((e) => { fail(e); main.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; });
   refreshErr();
   every(30000, refreshErr);
@@ -233,10 +234,11 @@ async function showErrors() {
       ${x.hint ? `<div class="note c-hb">→ ${esc(x.hint)}</div>` : ''}
       ${canOp() ? `<div class="row" style="justify-content:flex-end">${extra || ''}<button class="btn s" data-e="ack" data-k="${kind}" data-id="${x.id}">Скрыть</button></div>` : ''}</div>`;
   function draw() {
-    const n = d.system.length + d.jobs.length + d.tasks.length;
+    d.runs = d.runs || [];
+    const n = d.system.length + d.jobs.length + d.tasks.length + d.runs.length;
     m.el.querySelector('.dlg').innerHTML = `<div class="row"><h2 class="t grow">Ошибки · ${n}</h2>
         <a class="btn s" href="/api/report/errors.html" target="_blank" rel="noopener">Отчёт HTML / PDF</a>
-        ${canOp() && (d.jobs.length || d.tasks.length) ? '<button class="btn s" data-e="ackall">Скрыть все</button>' : ''}
+        ${canOp() && (d.jobs.length || d.tasks.length || d.runs.length) ? '<button class="btn s" data-e="ackall">Скрыть все</button>' : ''}
         <button class="btn s" data-close>Закрыть</button></div>
       ${!n ? '<div class="alert ok"><div>Ошибок нет — всё работает.</div></div>' : ''}
       ${d.system.length ? `<div class="lbl">Службы</div>${d.system.map((x) => `<div class="erritem"><div class="jh"><b class="c-bad">${esc(x.title)}</b></div><div class="note">${esc(x.message)}</div><div class="note c-hb">→ ${esc(x.hint)}</div></div>`).join('')}` : ''}
@@ -246,6 +248,8 @@ async function showErrors() {
       ${d.tasks.length ? `<div class="lbl">Назначения на устройствах · ${d.tasks.length}</div>${d.tasks.map((x) => item('tasks', x,
         `${esc(x.host)}: ${esc(x.action)} ${esc(x.name)} ${esc(x.evr)}`, `<a href="#/device/${x.host_id}" data-close>карточка устройства</a> · ${esc(x.who || '')} · #${x.id}`,
         x.output.slice(-1500), canOp() ? `<button class="btn s p" data-e="tretry" data-id="${x.id}">Повторить</button>` : '')).join('')}` : ''}
+      ${d.runs.length ? `<div class="lbl">Запуски плейбуков · ${d.runs.length}</div>${d.runs.map((x) => item('runs', x,
+        `${esc(x.title)} <span class="muted">#${x.id}</span>`, `<a href="#/run/${x.id}" data-close>открыть запуск</a> · ${esc(x.who || '')}`, x.message, '')).join('')}` : ''}
       <div class="note">Скрытая ошибка больше не показывается, но остаётся в отчёте «все ошибки» (<a href="/api/report/errors.html?all=1" target="_blank" rel="noopener">открыть</a>). Повтор создаёт новое задание; если оно пройдёт, ошибка исчезнет сама.</div>`;
   }
   m.el.addEventListener('click', async (ev) => {
@@ -687,6 +691,12 @@ function sysBox(h) {
 }
 
 /* ------------------------------------------------------------------ устройства */
+function osUpCell(h) {
+  if (h.n_os_updates == null) return '<span class="muted" title="агент 1.3 сообщает обновления ОС при полном отчёте">ОС: —</span>';
+  const r = h.need_reboot ? ' <span class="c-ex" title="нужна перезагрузка (needs-restarting)">↻</span>' : '';
+  if (!h.n_os_updates) return '<span class="c-ok">ОС: актуальна</span>' + r;
+  return `<span class="${h.n_security ? 'c-ex' : 'c-up'}">ОС: ${h.n_os_updates}${h.n_security ? ` · ${h.n_security} безоп.` : ''}</span>${r}`;
+}
 const STATUS_RU = { online: 'на связи', late: 'давно не было', offline: 'нет связи' };
 async function vDevices(main) {
   async function draw() {
@@ -697,7 +707,8 @@ async function vDevices(main) {
       <div class="tiles">
         <div class="tile"><b>${hs.length}</b><span>устройств</span></div>
         <div class="tile"><b style="color:var(--online)">${hs.filter((h) => h.status === 'online').length}</b><span>на связи</span></div>
-        <div class="tile"><b style="color:var(--info)">${sum('n_updates')}</b><span>доступно обновлений</span></div>
+        <div class="tile"><b style="color:var(--info)">${sum('n_updates')}</b><span>обновлений из HomeRepo</span></div>
+        <div class="tile"><b style="color:${sum('n_security') ? 'var(--warn)' : 'var(--info)'}">${sum('n_os_updates')}${sum('n_security') ? `<small class="secn"> · ${sum('n_security')} безоп.</small>` : ''}</b><span>обновлений ОС</span></div>
         <div class="tile"><b style="color:var(--warn)">${sum('n_external')}</b><span>пакетов извне</span></div>
         <div class="tile click" data-act="toassign"><b>${sum('n_pending')}</b><span>назначения ждут</span></div>
       </div>
@@ -708,10 +719,10 @@ async function vDevices(main) {
         <tbody>${hs.map((h) => `<tr class="clk" data-act="host" data-id="${h.id}" data-s="${esc((h.fqdn + ' ' + h.ip + ' ' + h.name).toLowerCase())}">
           <td class="nm"><span class="dot ${h.status}" title="${STATUS_RU[h.status]}"></span>${esc(h.name)}<span class="sub">${esc(h.fqdn || '')} · ${esc(h.ip || '')}</span></td>
           <td>${osBadge('linux', (h.os_name || '?') + ' ' + (h.os_version || ''))} <span class="muted">· ${esc(h.arch || '?')}</span></td>
-          <td class="${h.status === 'online' ? '' : h.status === 'late' ? 'c-ex' : 'c-bad'}">${h.last_report ? ago(h.last_poll) : 'ждём первый отчёт'}${h.hw && h.hw.model ? '<span class="sub">' + esc(h.hw.model) + '</span>' : ''}</td>
+          <td class="trunc ${h.status === 'online' ? '' : h.status === 'late' ? 'c-ex' : 'c-bad'}">${h.last_report ? ago(h.last_poll) : 'ждём первый отчёт'}${h.hw && h.hw.model ? '<span class="sub">' + esc(h.hw.model) + '</span>' : ''}</td>
           <td>${loadCell(h)}</td>
           <td class="num c-hb">${h.n_homerepo}</td><td class="num c-ex">${h.n_external}</td><td class="muted">${h.n_os}</td>
-          <td class="num c-up">${h.n_updates == null ? '?' : h.n_updates}</td>
+          <td class="nowrap"><span class="c-up" title="обновления из HomeRepo">${h.n_updates == null ? '?' : h.n_updates}</span> <span class="muted small">HomeRepo</span><span class="sub">${osUpCell(h)}</span></td>
           <td><div style="display:flex;flex-wrap:wrap;gap:4px">${h.n_pending ? `<span class="tag info">${h.n_pending} ждёт</span>` : ''}${h.n_errors ? `<span class="tag bad">${h.n_errors} ошибк.</span>` : ''}${!h.n_pending && !h.n_errors ? '<span class="muted">—</span>' : ''}</div></td></tr>`).join('')
         || '<tr><td colspan="9" class="empty">устройств пока нет — подключите первое в разделе «Подключение»</td></tr>'}</tbody></table></div>
         <div class="bar foot"><span><b class="c-hb">Из HomeRepo</b> — пришёл из нашего репозитория · <b class="c-ex">Извне</b> — сторонний репозиторий или .rpm вручную · <b>Из ОС</b> — официальные репозитории системы</span></div>
@@ -724,7 +735,7 @@ async function vDevices(main) {
   every(20000, () => { if (!$('#hq') || !$('#hq').value) draw().catch(() => { }); });
 }
 
-const ACT_RU = { install: 'установить / обновить', update: 'обновить', remove: 'удалить', hold: 'держать версию', unhold: 'снять фиксацию', collect: 'забрать в HomeRepo' };
+const ACT_RU = { install: 'установить / обновить', update: 'обновить', remove: 'удалить', hold: 'держать версию', unhold: 'снять фиксацию', collect: 'забрать в HomeRepo', ansible_access: 'доступ Ansible', upgrade: 'обновить систему' };
 const TST = {
   pending: (t) => t.schedule === 'night' ? '<span class="tag info">ночью</span>' : t.schedule === 'at' ? `<span class="tag info">${fmtDT(t.not_before)}</span>` : '<span class="tag info">ждёт агента</span>',
   sent: () => '<span class="tag run">выполняется</span>', processing: () => '<span class="tag run">в подписи</span>', done: () => '<span class="tag ok">выполнено</span>', error: () => '<span class="tag bad">ошибка</span>',
@@ -754,12 +765,19 @@ async function vDevice(main, id) {
     const by = (c) => h.packages.filter((p) => p.cls === c);
     const hr = by('homerepo'), ex = by('external'), os = by('os');
     const pend = h.tasks.filter((t) => t.status === 'pending' || t.status === 'sent' || t.status === 'processing');
-    const tabs = [['homerepo', 'Из HomeRepo', hr.length], ['external', 'Извне', ex.length], ['os', 'Из ОС', os.length], ['updates', 'Обновления', h.updates.length], ['tasks', 'Назначения', pend.length]];
+    const ou = h.os_updates;
+    const tabs = [['homerepo', 'Из HomeRepo', hr.length], ['external', 'Извне', ex.length], ['os', 'Из ОС', os.length], ['updates', 'Обновления', h.updates.length + (ou && !ou.error ? ou.count : 0)], ['tasks', 'Назначения', pend.length]];
     const isPk = st.tab === 'homerepo' || st.tab === 'external' || st.tab === 'os';
     const old = $('#dlist', main), keepScroll = old && old.dataset.tab === st.tab ? old.scrollTop : 0;
     let body = '';
     if (isPk) body = pkList();
-    else if (st.tab === 'updates') body = `<table class="t"><thead><tr><th>Пакет</th><th>Установлено</th><th>В HomeRepo</th><th>Ветка</th><th>Сейчас из</th><th></th></tr></thead><tbody>${h.updates.map((u) => `<tr><td class="nm">${esc(u.name)}</td><td>${esc(u.installed)}</td><td class="c-up num">${esc(u.available)}</td><td class="br">${esc(u.branch)}</td><td class="muted">${esc(u.from_repo || u.cls)}</td><td>${canOp() ? `<button class="btn s" data-act="upd1" data-n="${esc(u.name)}">Обновить</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">всё актуально</td></tr>'}</tbody></table>`;
+    else if (st.tab === 'updates') body = `<div class="bar"><b class="ttl" style="font-size:12px">ИЗ HOMEREPO · ${h.updates.length}</b></div><table class="t"><thead><tr><th>Пакет</th><th>Установлено</th><th>В HomeRepo</th><th>Ветка</th><th>Сейчас из</th><th></th></tr></thead><tbody>${h.updates.map((u) => `<tr><td class="nm">${esc(u.name)}</td><td>${esc(u.installed)}</td><td class="c-up num">${esc(u.available)}</td><td class="br">${esc(u.branch)}</td><td class="muted">${esc(u.from_repo || u.cls)}</td><td>${canOp() ? `<button class="btn s" data-act="upd1" data-n="${esc(u.name)}">Обновить</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">всё актуально</td></tr>'}</tbody></table>
+      <div class="bar" style="border-top:1px solid var(--line)"><b class="ttl" style="font-size:12px">ОБНОВЛЕНИЯ СИСТЕМЫ${ou && !ou.error ? ' · ' + ou.count : ''}${ou && ou.security ? ` <span class="tag warn">${ou.security} безопасности</span>` : ''}${ou && ou.reboot ? ' <span class="tag warn">нужна перезагрузка</span>' : ''}</b><div class="grow"></div>
+        ${canOp() && ou && ou.count ? `${ou.security ? '<button class="btn s" data-act="upsys" data-sec="1">Только безопасность</button>' : ''}<button class="btn s p" data-act="upsys">Обновить систему</button>` : ''}</div>
+      ${!ou ? '<div class="empty">агент ещё не сообщал об обновлениях ОС (нужен агент 1.3 — обновится сам; затем «Запросить отчёт»)</div>'
+        : ou.error ? `<div class="alert warn" style="margin:10px"><div>dnf check-update на хосте: ${esc(ou.error)}</div></div>`
+        : `<table class="t"><thead><tr><th>Пакет</th><th>Доступна версия</th><th>Арх.</th><th>Репозиторий</th><th>Безопасность</th></tr></thead><tbody>${ou.list.slice().sort((a, b) => (b.security ? 1 : 0) - (a.security ? 1 : 0) || a.name.localeCompare(b.name)).map((u) => `<tr><td class="nm">${esc(u.name)}</td><td class="c-up">${esc(u.evr)}</td><td>${esc(u.arch)}</td><td class="muted">${esc(u.repo)}</td><td>${u.security ? `<span class="tag ${/critical|important/i.test(u.security) ? 'bad' : 'warn'}">${esc(u.security)}</span>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">система актуальна</td></tr>'}</tbody></table>
+          <div class="note" style="padding:8px 14px">проверено ${fmtDT(ou.checked)} · обновления из HomeRepo показаны выше отдельно</div>`}`;
     else body = `<table class="t"><thead><tr><th>Пакет</th><th>Действие</th><th>Создано</th><th>Статус</th><th>Результат</th><th></th></tr></thead><tbody>${h.tasks.map((t) => taskRow(t, false)).join('') || '<tr><td colspan="6" class="empty">назначений не было</td></tr>'}</tbody></table>`;
     const f = h.facts || {};
     main.innerHTML = `
@@ -788,6 +806,7 @@ async function vDevice(main, id) {
               <dt><a href="#" data-act="tab" data-t="os">Из репозиториев ОС</a></dt><dd>${os.length}</dd></dl>
             <div class="note">Нажмите на пакет в списке слева: в карточке пакета есть кнопки «Скачать в HomeRepo» (агент скачает пакет из его источника, служба подпишет и опубликует его), «Перевести на HomeRepo», «Обновить», «Удалить с хоста» и «Держать версию».</div>
           </section>
+          ${ansBox(h)}
           <section class="box"><h2 class="t">Репозитории на хосте</h2>
             <div class="note">${(f.repos || []).filter((r) => r.enabled).map((r) => `<span class="${(f.homerepo_ids || []).includes(r.id) ? 'c-hb' : (f.os_repos || []).includes(r.id) ? '' : 'c-ex'}">${esc(r.id)}</span>`).join(' · ') || '—'}</div>
             ${(f.repos || []).length && !(f.homerepo_ids || []).length ? '<div class="alert warn"><div>HomeRepo на этом хосте не подключён</div></div>' : ''}
@@ -795,6 +814,14 @@ async function vDevice(main, id) {
           </section>
         </div></div>`;
     const w = $('#dlist', main); if (w) w.scrollTop = keepScroll;
+  }
+  function ansBox(h) {
+    const a = h.ansible_access || {};
+    const ACC = { ok: '<span class="tag ok">доступ есть</span>', none: '<span class="tag dim">нет доступа</span>', pending: '<span class="tag info">ждёт агента</span>', error: '<span class="tag bad">ошибка</span>', stale: '<span class="tag warn">ключ сменился</span>' };
+    return `<section class="box"><div class="row"><h2 class="t grow">Ansible</h2>${a.local ? '<span class="tag info">локально</span>' : (ACC[a.state] || esc(a.state || ''))}</div>
+      <div class="note">${a.local ? 'Это сам сервер HomeRepo: плейбуки выполняются на нём локально, без SSH.' : a.state === 'ok' ? `Плейбуки входят на хост пользователем <b>${esc(a.user || a.remote_user)}</b> по ключу исполнителя.` : `Агент может создать пользователя <b>${esc(a.remote_user || '')}</b> с ключом исполнителя и sudo — тогда сюда можно запускать плейбуки.`}
+        ${a.msg ? `<br><span class="muted">${esc(a.msg)}</span>` : ''}</div>
+      <div class="row">${isAdmin() && !a.local ? (a.state === 'ok' || a.state === 'pending' ? '<button class="btn s" data-act="ansacc" data-op="revoke">Отозвать доступ</button>' : '<button class="btn s p" data-act="ansacc" data-op="grant">Разрешить Ansible</button>') : ''}<a class="btn s" href="#/playbooks">Плейбуки</a></div></section>`;
   }
   function srcLabel(p) { const r = p.from_repo || ''; if (r === '@commandline') return 'вручную из .rpm'; if (!r) return 'неизвестно'; return r; }
   const CLS_RU = { homerepo: 'HomeRepo', external: 'извне', os: 'репозиторий ОС' };
@@ -869,6 +896,24 @@ async function vDevice(main, id) {
     } catch (e) { fail(e); }
   };
   S.acts.tab = (el) => { st.tab = el.dataset.t; draw(); };
+  S.acts.ansacc = async (el) => {
+    const op = el.dataset.op;
+    if (!await confirmDlg(op === 'grant' ? 'Разрешить Ansible' : 'Отозвать доступ Ansible', op === 'grant'
+      ? `Агент на <b>${esc(st.h.name)}</b> создаст пользователя для Ansible с ключом исполнителя HomeRepo и sudo без пароля.`
+      : `Агент на <b>${esc(st.h.name)}</b> уберёт ключ исполнителя и sudo, а созданного для Ansible пользователя удалит.`, op === 'grant' ? 'Разрешить' : 'Отозвать', op !== 'grant')) return;
+    try { await POST('/api/ansible/access', { hosts: [+id], op }); toast('назначено: агент выполнит при следующем опросе'); await load(); draw(); } catch (e) { fail(e); }
+  };
+  S.acts.upsys = async (el) => {
+    const sec = !!el.dataset.sec;
+    const ou = st.h.os_updates || {};
+    const m = modal(`<h2 class="t">Обновить систему</h2><div class="note" style="font-size:13px;color:var(--text2)">Агент на <b>${esc(st.h.name)}</b> выполнит <code>dnf upgrade${sec ? ' --security' : ''}</code>: ${sec ? 'обновления безопасности — ' + ou.security : 'все доступные обновления — ' + ou.count}.</div>
+      <label class="chk"><input type="checkbox" id="uprb">перезагрузить, если обновление этого требует (через минуту после завершения)</label>
+      <div class="lbl">Когда</div><select class="sel" id="upsch"><option value="now">при следующем опросе агента</option><option value="night">ночью, 03:00–05:00</option></select>
+      <div class="row" style="justify-content:flex-end"><button class="btn" data-close>Отмена</button><button class="btn p" id="upgo">Обновить</button></div>`, true);
+    m.el.querySelector('#upgo').onclick = async () => {
+      try { await POST('/api/tasks', { action: 'upgrade', security: sec, reboot: m.el.querySelector('#uprb').checked, hosts: [+id], schedule: m.el.querySelector('#upsch').value }); m.close(); toast('назначено обновление системы'); await load(); draw(); } catch (e) { fail(e); }
+    };
+  };
   S.acts.pk = (el) => { const p = st.h.packages.find((x) => x.name === el.dataset.n && x.arch === el.dataset.a); if (p) pkCard(p); };
   S.on.dq = (el) => { st.q = el.value; const l = $('#dlist', main); if (l) { l.innerHTML = pkList(); l.scrollTop = 0; } };
   S.acts.upd1 = (el) => mk('install', [el.dataset.n]);
@@ -1012,11 +1057,13 @@ async function vAssign(main) {
   const names = () => { const m = new Map(); st.pk.forEach((p) => { if (!m.has(p.name)) m.set(p.name, []); m.get(p.name).push(p); }); return m; };
   const harch = (h) => ({ amd64: 'x86_64', arm64: 'aarch64' }[h.arch] || h.arch);
   function compat(name, h) { const l = names().get(name) || []; return l.find((p) => p.latest && p.arches.split(' ').includes(harch(h))); }
+  const isUp = () => st.action === 'upgrade' || st.action === 'upgrade_sec';
   function summary() {
     let ops = 0, skip = [], off = 0;
     for (const hid of st.selH) {
       const h = st.hosts.find((x) => x.id === hid); if (!h) continue;
       if (h.status !== 'online') off++;
+      if (isUp()) { ops++; continue; }
       for (const n of st.selP) {
         if ((st.action === 'install' || st.action === 'update') && !compat(n, h)) { skip.push(`${h.name}: ${n}`); continue; }
         ops++;
@@ -1053,11 +1100,12 @@ async function vAssign(main) {
       </section>
       <section class="box"><h2 class="t"><i>3</i>Действие</h2>
         <div class="lbl">Что сделать</div>
-        ${[['install', 'Установить или обновить до последней версии'], ['update', 'Только обновить, если уже стоит'], ['remove', 'Удалить с устройств'], ['hold', 'Держать текущую версию (запретить обновление)'], ['unhold', 'Снять фиксацию версии']].map(([v, t]) => `<label class="chk"><input type="radio" name="act" value="${v}" data-ch="act" ${st.action === v ? 'checked' : ''}>${t}</label>`).join('')}
+        ${[['install', 'Установить или обновить до последней версии'], ['update', 'Только обновить, если уже стоит'], ['remove', 'Удалить с устройств'], ['hold', 'Держать текущую версию (запретить обновление)'], ['unhold', 'Снять фиксацию версии'], ['upgrade', 'Обновить систему: все обновления ОС'], ['upgrade_sec', 'Обновить систему: только безопасность']].map(([v, t]) => `<label class="chk"><input type="radio" name="act" value="${v}" data-ch="act" ${st.action === v ? 'checked' : ''}>${t}</label>`).join('')}
+        ${isUp() ? `<label class="chk"><input type="checkbox" data-ch="upreboot" ${st.reboot ? 'checked' : ''}>перезагрузить, если обновление этого требует</label><div class="note">Пакеты выбирать не нужно: агент выполнит dnf upgrade${st.action === 'upgrade_sec' ? ' --security' : ''} целиком.</div>` : ''}
         <div class="lbl" style="margin-top:6px">Когда</div>
         <select class="sel" data-ch="sched"><option value="now" ${st.sched === 'now' ? 'selected' : ''}>При следующем опросе агента (≤ 2 мин)</option><option value="night" ${st.sched === 'night' ? 'selected' : ''}>Ночью, 03:00–05:00</option><option value="at" ${st.sched === 'at' ? 'selected' : ''}>В выбранное время…</option></select>
         ${st.sched === 'at' ? `<input class="inp" type="datetime-local" data-ch="at" value="${esc(st.at)}">` : ''}
-        <div class="sum">${st.selP.size} пакет(ов) × ${st.selH.size} устройств = ${sm.ops} операций${sm.skip.length ? `<br>пропущено (нет сборки под архитектуру): ${sm.skip.length}` : ''}${sm.off ? `<br>отложено (устройство не на связи): ${sm.off}` : ''}</div>
+        <div class="sum">${isUp() ? `обновление системы на ${st.selH.size} устройств(ах)` : `${st.selP.size} пакет(ов) × ${st.selH.size} устройств = ${sm.ops} операций`}${sm.skip.length ? `<br>пропущено (нет сборки под архитектуру): ${sm.skip.length}` : ''}${sm.off ? `<br>отложено (устройство не на связи): ${sm.off}` : ''}</div>
         ${canOp() ? `<button class="btn p" data-act="go" ${sm.ops ? '' : 'disabled'} style="justify-content:center">Назначить</button>` : '<div class="note">Назначать может оператор или администратор.</div>'}
       </section></div>
       <section class="panel">
@@ -1076,8 +1124,10 @@ async function vAssign(main) {
   S.on.sched = (el) => { st.sched = el.value; draw(); };
   S.on.at = (el) => { st.at = el.value; };
   S.on.tf = async (el) => { st.tf = el.value; await load(); draw(); };
+  S.on.upreboot = (el) => { st.reboot = el.checked; };
   S.acts.go = async () => {
-    const body = { action: st.action, items: [...st.selP].map((n) => ({ name: n })), hosts: [...st.selH], schedule: st.sched };
+    const body = isUp() ? { action: 'upgrade', security: st.action === 'upgrade_sec', reboot: !!st.reboot, hosts: [...st.selH], schedule: st.sched }
+      : { action: st.action, items: [...st.selP].map((n) => ({ name: n })), hosts: [...st.selH], schedule: st.sched };
     if (st.sched === 'at') { const t = Date.parse(st.at); if (!t) return toast('укажите время', 'err'); body.at = t / 1000; }
     try {
       const r = await POST('/api/tasks', body);

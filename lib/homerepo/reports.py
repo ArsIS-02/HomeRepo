@@ -43,7 +43,7 @@ footer{margin-top:28px;border-top:1px solid #d3d9dd;padding-top:10px;font-size:1
 ST_RU = {"online": "на связи", "late": "давно не было", "offline": "нет связи"}
 CLS_RU = {"homerepo": "из HomeRepo", "external": "извне", "os": "из ОС"}
 ACT_RU = {"install": "установить / обновить", "update": "обновить", "remove": "удалить", "hold": "держать версию",
-          "unhold": "снять фиксацию", "collect": "забрать в HomeRepo"}
+          "unhold": "снять фиксацию", "collect": "забрать в HomeRepo", "ansible_access": "доступ Ansible", "upgrade": "обновить систему"}
 TST_RU = {"pending": "ждёт", "sent": "выполняется", "processing": "в службе подписи", "done": "выполнено", "error": "ошибка", "skipped": "пропущено",
           "cancelled": "отменено"}
 

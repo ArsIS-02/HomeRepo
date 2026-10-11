@@ -142,6 +142,19 @@ def _hw(h):
     return out
 
 
+def _os_updates(u):
+    if not isinstance(u, dict):
+        return None
+    lst = []
+    for x in (u.get("list") or [])[:3000]:
+        if isinstance(x, list) and len(x) >= 4:
+            lst.append([_clean(x[0], 200), _clean(x[1], 20), _clean(x[2], 100), _clean(x[3], 100),
+                        _clean(x[4] if len(x) > 4 else "", 30)])
+    rb = u.get("reboot")
+    return {"checked": _num(u.get("checked")), "list": lst, "error": _clean(u.get("error"), 400),
+            "reboot": rb if isinstance(rb, bool) else None}
+
+
 def _clean(v, n):
     return re.sub(r"[\x00-\x1f]", "", str(v or "")).strip()[:n]
 
@@ -218,6 +231,7 @@ def report(req):
     facts = {k: d.get(k) for k in ("repos", "homerepo_ids", "os_repos", "os_keys", "uptime", "dnf", "python",
                                    "versionlock") if k in d}
     hw = _hw(d.get("hw"))
+    ou = _os_updates(d.get("os_updates"))
     now = time.time()
     with db.tx(con):
         con.execute("DELETE FROM host_packages WHERE host_id=?", (h["id"],))
@@ -230,6 +244,8 @@ def report(req):
                      _clean(d.get("arch"), 20), _clean(d.get("kernel"), 100), _clean(d.get("agent_version"), 20),
                      now, now, len(rows), json.dumps(facts, ensure_ascii=False), req.ip,
                      json.dumps(hw, ensure_ascii=False) if hw else (h.get("hw") or "{}"), h["id"]))
+        if ou is not None:
+            con.execute("UPDATE hosts SET os_updates=? WHERE id=?", (json.dumps(ou, ensure_ascii=False), h["id"]))
     return jresp({"ok": True, "packages": len(rows)})
 
 
@@ -251,6 +267,9 @@ def result(req):
     else:
         con.execute("UPDATE tasks SET status=?, output=?, finished=? WHERE id=?", (st, out, time.time(), t["id"]))
         con.execute("UPDATE hosts SET want_report=1 WHERE id=?", (req.host["id"],))
+        if t["action"] == "ansible_access":
+            from . import ansibleapi
+            ansibleapi.on_access_result(con, t, st, out)
     return jresp({"ok": True})
 
 

@@ -85,6 +85,26 @@ def host_status(h, interval):
     return "offline"
 
 
+def os_updates_of(h):
+    """Обновления ОС из отчёта агента; обновления из самого HomeRepo считаются отдельно (они в «Обновлениях»)."""
+    try:
+        u = json.loads(h.get("os_updates") or "null")
+    except ValueError:
+        u = None
+    if not u:
+        return None
+    f = h.get("facts") or "{}"
+    try:
+        hr = set((f if isinstance(f, dict) else json.loads(f)).get("homerepo_ids") or [])
+    except (ValueError, AttributeError):
+        hr = set()
+    lst = [{"name": x[0], "arch": x[1], "evr": x[2], "repo": x[3], "security": x[4] if len(x) > 4 else ""}
+           for x in u.get("list") or [] if isinstance(x, list) and len(x) >= 4]
+    sysl = [x for x in lst if x["repo"] not in hr and not x["repo"].startswith("homerepo")]
+    return {"checked": u.get("checked"), "error": u.get("error") or "", "reboot": u.get("reboot"),
+            "list": sysl, "count": len(sysl), "security": sum(1 for x in sysl if x["security"])}
+
+
 def host_summary(con, cfg, idx=None):
     idx = idx or repo_index(con)
     hosts = db.rows(con.execute("SELECT * FROM hosts ORDER BY name"))
@@ -104,6 +124,11 @@ def host_summary(con, cfg, idx=None):
         h["n_pending"] = pend.get(h["id"], 0)
         h["n_errors"] = errs.get(h["id"], 0)
         h["status"] = host_status(h, cfg.agent_interval)
+        ou = os_updates_of(h)
+        h["n_os_updates"] = ou["count"] if ou and not ou["error"] else None
+        h["n_security"] = ou["security"] if ou and not ou["error"] else None
+        h["need_reboot"] = ou["reboot"] if ou else None
+        h.pop("os_updates", None)
         h.pop("secret_hash", None)
         h.pop("facts", None)
         try:

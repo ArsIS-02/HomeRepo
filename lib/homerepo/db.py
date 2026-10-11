@@ -188,6 +188,49 @@ SCHEMA = [
     ALTER TABLE jobs ADD COLUMN ack INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE tasks ADD COLUMN ack INTEGER NOT NULL DEFAULT 0;
     """,
+    # v5: плейбуки Ansible, запуски и их события; доступ Ansible и обновления ОС на хостах
+    """
+    CREATE TABLE playbooks(
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        model TEXT,
+        yaml TEXT NOT NULL DEFAULT '',
+        raw INTEGER NOT NULL DEFAULT 0,
+        source TEXT,
+        created_by TEXT, created REAL NOT NULL,
+        updated_by TEXT, updated REAL NOT NULL
+    );
+    CREATE TABLE runs(
+        id INTEGER PRIMARY KEY,
+        playbook_id INTEGER,
+        name TEXT,
+        yaml TEXT NOT NULL,
+        targets TEXT NOT NULL DEFAULT '[]',
+        mode TEXT NOT NULL DEFAULT 'run',
+        opts TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'queued',
+        created_by TEXT, created REAL NOT NULL,
+        started REAL, finished REAL,
+        rc INTEGER, message TEXT, recap TEXT,
+        ack INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX runs_status ON runs(status, id);
+    CREATE TABLE run_events(
+        id INTEGER PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        ts REAL, kind TEXT, host TEXT, task TEXT, task_name TEXT, status TEXT, data TEXT
+    );
+    CREATE INDEX run_events_run ON run_events(run_id, id);
+    CREATE TABLE run_log(
+        id INTEGER PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        text TEXT NOT NULL
+    );
+    CREATE INDEX run_log_run ON run_log(run_id, id);
+    ALTER TABLE hosts ADD COLUMN ansible TEXT;
+    ALTER TABLE hosts ADD COLUMN os_updates TEXT;
+    """,
 ]
 
 _local = threading.local()

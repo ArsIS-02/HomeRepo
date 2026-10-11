@@ -24,7 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-AGENT_VERSION = "1.2.0"
+AGENT_VERSION = "1.3.0"
 CONF_DIR = "/etc/homerepo-agent"
 CONF = os.path.join(CONF_DIR, "agent.json")
 CA = os.path.join(CONF_DIR, "ca.pem")
@@ -454,8 +454,158 @@ def collect_report():
         "repos": [{k: r[k] for k in ("id", "name", "baseurl", "enabled")} for r in repos],
         "homerepo_ids": homerepo_ids, "os_repos": os_repos, "os_keys": os_keys,
         "versionlock": [x for x in vl.splitlines() if x.strip()] if rc == 0 else None,
-        "hw": hw_facts(), "packages": pk,
+        "hw": hw_facts(), "packages": pk, "os_updates": os_updates(),
     }
+
+
+UPDATE_LINE = re.compile(r"^(\S+)\.(\w+)\s+(\S+)\s+(\S+)\s*$")
+NEVRA_EPOCH = re.compile(r"-\d+:")
+
+
+def os_updates():
+    """Доступные обновления системы (dnf check-update) и какие из них — обновления безопасности."""
+    rc, out = run(["dnf", "-q", "check-update"], timeout=600)
+    res = {"checked": int(time.time()), "list": [], "security": 0, "reboot": None, "error": ""}
+    if rc not in (0, 100):
+        res["error"] = short(out, 300) or "dnf check-update: код %d" % rc
+        return res
+    ups = []
+    for ln in out.splitlines():
+        if ln.startswith(("Obsoleting", "Security:", "Last metadata")):
+            if ln.startswith("Obsoleting"):
+                break
+            continue
+        m = UPDATE_LINE.match(ln.strip())
+        if m and not m.group(1).startswith("@"):
+            ups.append([m.group(1), m.group(2), m.group(3), m.group(4), ""])
+    if ups:
+        rc2, sec = run(["dnf", "-q", "updateinfo", "list", "--security", "--updates"], timeout=600)
+        if rc2 != 0:
+            rc2, sec = run(["dnf", "-q", "updateinfo", "list", "--security"], timeout=600)
+        sev = {}
+        if rc2 == 0:
+            for ln in sec.splitlines():
+                parts = ln.split()
+                if len(parts) >= 3:
+                    level = parts[1].split("/")[0] if "/" in parts[1] else "Security"
+                    sev[NEVRA_EPOCH.sub("-", parts[-1])] = level
+        for u in ups:
+            key = "%s-%s.%s" % (u[0], u[2].split(":")[-1], u[1])
+            if key in sev:
+                u[4] = sev[key]
+        res["security"] = sum(1 for u in ups if u[4])
+    res["list"] = ups[:2000]
+    rc3, _ = run(["needs-restarting", "-r"], timeout=120)
+    res["reboot"] = True if rc3 == 1 else False if rc3 == 0 else None
+    return res
+
+
+def do_upgrade(t):
+    p = t.get("params") or {}
+    cmd = ["dnf", "-y", "--refresh", "upgrade"]
+    if p.get("security"):
+        cmd.append("--security")
+    rc, out = run(cmd, timeout=7200)
+    if rc != 0:
+        return "error", short(out)
+    tail = short(out, 3000)
+    rc3, _ = run(["needs-restarting", "-r"], timeout=120)
+    note = ""
+    if rc3 == 1:
+        if p.get("reboot"):
+            run(["shutdown", "-r", "+1", "HomeRepo: перезагрузка после обновления"], timeout=60)
+            note = "\nнужна перезагрузка — хост перезагрузится через минуту"
+        else:
+            note = "\nнужна перезагрузка (needs-restarting -r)"
+    head = "система обновлена%s" % (" (только обновления безопасности)" if p.get("security") else "")
+    if "Nothing to do" in out or "Ничего не нужно делать" in out:
+        head = "обновлений нет"
+    return "done", head + note + "\n" + tail
+
+
+ANSIBLE_MARK = ".homerepo-ansible"
+
+
+def do_ansible_access(t):
+    """Доступ Ansible: служебный пользователь с ключом исполнителя HomeRepo и sudo без пароля (или отзыв)."""
+    p = t.get("params") or {}
+    user = p.get("user") or "homerepo-ansible"
+    if not re.match(r"^[a-z_][a-z0-9_.-]{0,31}$", user):
+        return "error", "недопустимое имя пользователя: %s" % user
+    sudoers = "/etc/sudoers.d/" + re.sub(r"[^A-Za-z0-9_-]", "_", user)
+    import pwd
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        pw = None
+    if p.get("op") == "revoke":
+        msg = []
+        if os.path.exists(sudoers):
+            os.unlink(sudoers)
+            msg.append("sudo для %s убран" % user)
+        if pw:
+            ak = os.path.join(pw.pw_dir, ".ssh", "authorized_keys")
+            if os.path.exists(ak):
+                with open(ak) as f:
+                    keep = [ln for ln in f if "homerepo-runner" not in ln]
+                with open(ak, "w") as f:
+                    f.writelines(keep)
+                msg.append("ключ исполнителя удалён")
+            if os.path.exists(os.path.join(pw.pw_dir, ANSIBLE_MARK)):
+                rc, out = run(["userdel", "-r", user], timeout=120)
+                msg.append("пользователь %s удалён" % user if rc == 0 else "userdel: " + short(out, 300))
+        return "done", "; ".join(msg) or "доступа не было"
+    key = (p.get("pubkey") or "").strip()
+    if not key.startswith(("ssh-ed25519 ", "ssh-rsa ", "ecdsa-")):
+        return "error", "нет открытого ключа исполнителя"
+    msg = []
+    if not pw:
+        rc, out = run(["useradd", "-m", "-s", "/bin/bash", "-c", "HomeRepo Ansible", user], timeout=120)
+        if rc != 0:
+            return "error", "useradd: " + short(out, 500)
+        run(["usermod", "-p", "*", user], timeout=60)  # без пароля, но не «заблокирован» для входа по ключу
+        pw = pwd.getpwnam(user)
+        with open(os.path.join(pw.pw_dir, ANSIBLE_MARK), "w") as f:
+            f.write("создан агентом HomeRepo для Ansible\n")
+        msg.append("создан пользователь %s" % user)
+    else:
+        msg.append("пользователь %s уже есть" % user)
+    sd = os.path.join(pw.pw_dir, ".ssh")
+    os.makedirs(sd, mode=0o700, exist_ok=True)
+    ak = os.path.join(sd, "authorized_keys")
+    lines = []
+    if os.path.exists(ak):
+        with open(ak) as f:
+            lines = [ln for ln in f if "homerepo-runner" not in ln]
+    if not key.endswith("homerepo-runner"):
+        key += " homerepo-runner"
+    lines.append(key + "\n")
+    with open(ak, "w") as f:
+        f.writelines(lines)
+    for path, mode in ((sd, 0o700), (ak, 0o600)):
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+        os.chmod(path, mode)
+    if shutil.which("restorecon"):
+        run(["restorecon", "-R", sd], timeout=60)
+    msg.append("ключ исполнителя добавлен")
+    if not shutil.which("visudo"):
+        run(["dnf", "-y", "-q", "install", "sudo"], timeout=1800)
+        if not shutil.which("visudo"):
+            return "error", "; ".join(msg) + "; на хосте нет sudo и его не удалось установить (dnf install sudo)"
+        msg.append("установлен sudo")
+    os.makedirs("/etc/sudoers.d", mode=0o750, exist_ok=True)
+    tmp = sudoers + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("# HomeRepo: доступ Ansible (создано агентом)\nDefaults:%s !requiretty\n%s ALL=(ALL) NOPASSWD: ALL\n"
+                % (user, user))
+    os.chmod(tmp, 0o440)
+    rc, out = run(["visudo", "-cf", tmp], timeout=60)
+    if rc != 0:
+        os.unlink(tmp)
+        return "error", "; ".join(msg) + "; sudoers не прошёл проверку: " + short(out, 300)
+    os.replace(tmp, sudoers)
+    msg.append("sudo без пароля настроен")
+    return "done", "; ".join(msg)
 
 
 # ---------------------------------------------------------------- назначения
@@ -493,6 +643,10 @@ def ensure_versionlock():
 def do_task(api, t):
     a = t["action"]
     name = t["name"]
+    if a == "upgrade":
+        return do_upgrade(t)
+    if a == "ansible_access":
+        return do_ansible_access(t)
     before = installed(name)
     if a == "install":
         target = (t.get("evr") or "")

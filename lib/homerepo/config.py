@@ -36,6 +36,14 @@ DEFAULTS = {
         "interval": "120",
         "report_every": "900",
     },
+    "ansible": {
+        "enabled": "yes",
+        "remote_user": "homerepo-ansible",
+        "runner_home": "/var/lib/homerepo-runner",
+        "playbook_cmd": "ansible-playbook",
+        "forks": "10",
+        "timeout_minutes": "120",
+    },
     "paths": {
         "state_dir": "/var/lib/homerepo",
         "web_dir": "",
@@ -95,6 +103,13 @@ class Config:
         self.agent_interval = cp.getint("agent", "interval")
         self.agent_report_every = cp.getint("agent", "report_every")
 
+        self.ansible_enabled = cp.getboolean("ansible", "enabled")
+        self.ansible_user = cp.get("ansible", "remote_user")
+        self.runner_home = cp.get("ansible", "runner_home")
+        self.playbook_cmd = cp.get("ansible", "playbook_cmd")
+        self.ansible_forks = cp.getint("ansible", "forks")
+        self.ansible_timeout = cp.getint("ansible", "timeout_minutes") * 60
+
         self.state_dir = cp.get("paths", "state_dir")
         self.web_dir = cp.get("paths", "web_dir") or os.path.join(base, "web")
         self.agent_file = cp.get("paths", "agent_file") or os.path.join(base, "agent", "homerepo-agent.py")
@@ -102,6 +117,11 @@ class Config:
     @property
     def db_path(self):
         return os.path.join(self.state_dir, "homerepo.db")
+
+    @property
+    def secrets_dir(self):
+        """Секретные переменные запуска: панель кладёт, исполнитель забирает и сразу удаляет."""
+        return os.path.join(self.state_dir, "run-secrets")
 
     @property
     def incoming_dir(self):
