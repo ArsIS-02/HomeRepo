@@ -1009,17 +1009,28 @@ def api_connect(req):
 # ====================================================================== журнал и пользователи
 @route("GET", "/api/audit")
 def api_audit(req):
+    from . import auditfmt
     con = C()
-    q = req.query.get("q", "").strip()
+    q = req.query.get("q", "").strip().lower()
     lim = min(int(req.query.get("limit", "200") or 200), 1000)
     off = int(req.query.get("offset", "0") or 0)
+    ctx = auditfmt.context(con)
+
+    def fmt(r):
+        r["label"] = auditfmt.LABELS.get(r["action"], r["action"])
+        r["text"] = auditfmt.describe(r["action"], r["detail"], r["user"], ctx)
+        return r
     if q:
-        like = "%" + q + "%"
-        rows = con.execute("SELECT * FROM audit WHERE user LIKE ? OR action LIKE ? OR detail LIKE ? OR ip LIKE ? "
-                           "ORDER BY id DESC LIMIT ? OFFSET ?", (like, like, like, like, lim, off))
+        # ищем и по исходной записи, и по её описанию человеческим языком
+        out = []
+        for r in db.rows(con.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 20000")):
+            fmt(r)
+            if any(q in str(r.get(k) or "").lower() for k in ("user", "ip", "action", "label", "text", "detail")):
+                out.append(r)
+        rows = out[off:off + lim]
     else:
-        rows = con.execute("SELECT * FROM audit ORDER BY id DESC LIMIT ? OFFSET ?", (lim, off))
-    return jresp({"audit": db.rows(rows)})
+        rows = [fmt(r) for r in db.rows(con.execute("SELECT * FROM audit ORDER BY id DESC LIMIT ? OFFSET ?", (lim, off)))]
+    return jresp({"audit": rows})
 
 
 @route("GET", "/api/users", perm="admin")
