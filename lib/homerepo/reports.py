@@ -81,7 +81,7 @@ def uptime(sec):
 
 def page(title, body, download_name):
     return """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%s</title><style>%s</style></head><body><div class="page">%s
+<title>%s</title><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="/icon.svg" type="image/svg+xml"><style>%s</style></head><body><div class="page">%s
 <footer>HomeRepo %s · отчёт сформирован %s · %s</footer></div><script src="/report.js"></script></body></html>""" % (
         e(title), CSS, body, VERSION, dt(time.time()), e(download_name))
 
