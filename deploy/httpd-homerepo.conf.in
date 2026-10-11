@@ -1,0 +1,25 @@
+# HomeRepo — создано установщиком (deploy/install.sh), режим Apache httpd.
+# Репозиторий: http(s)://<сервер>/homerepo/...   Панель: https://<сервер>/ (прокси на 127.0.0.1:@PORT@)
+
+Alias /homerepo "@REPO_ROOT@"
+<Directory "@REPO_ROOT@">
+    Options Indexes FollowSymLinks
+    AllowOverride None
+    Require all granted
+    IndexOptions FancyIndexing NameWidth=* HTMLTable
+    AddType application/x-rpm .rpm
+</Directory>
+<LocationMatch "/\.">
+    Require all denied
+</LocationMatch>
+
+ProxyRequests Off
+ProxyPreserveHost On
+ProxyTimeout 3600
+ProxyPass /homerepo/setup.sh http://127.0.0.1:@PORT@/agent/setup.sh
+ProxyPass /homerepo !
+ProxyPass / http://127.0.0.1:@PORT@/
+ProxyPassReverse / http://127.0.0.1:@PORT@/
+RequestHeader set X-Forwarded-Proto "https" "expr=%{HTTPS} == 'on'"
+RequestHeader set X-Forwarded-Proto "http" "expr=%{HTTPS} != 'on'"
+LimitRequestBody 0

@@ -1,0 +1,5 @@
+#!/bin/sh
+# HomeRepo CLI
+export PYTHONPATH=/opt/homerepo/lib
+export HOMEREPO_CONF="${HOMEREPO_CONF:-/etc/homerepo/homerepo.conf}"
+exec /usr/bin/python3 -m homerepo.cli "$@"

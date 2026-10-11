@@ -1,0 +1,31 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Синтаксис Python (сервер — 3.7+, агент — 3.6+)
+        run: |
+          python - <<'PY'
+          import ast, glob
+          for f in glob.glob("lib/homerepo/*.py"):
+              ast.parse(open(f, encoding="utf-8").read(), feature_version=(3, 7))
+          ast.parse(open("agent/homerepo-agent.py", encoding="utf-8").read(), feature_version=(3, 6))
+          print("ok")
+          PY
+      - name: Модульные тесты
+        run: PYTHONPATH=lib python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Скрипты
+        run: |
+          bash -n deploy/install.sh deploy/rollback.sh bin/homerepo lib/homerepo/askpass.sh
+          node --check web/app.js web/report.js

@@ -1,0 +1,34 @@
+[Unit]
+Description=HomeRepo web: панель управления репозиторием и устройствами
+After=network.target homerepo-signer.service
+
+[Service]
+Type=simple
+User=homerepo
+Group=homerepo
+UMask=0002
+Environment=PYTHONPATH=/opt/homerepo/lib
+Environment=HOMEREPO_CONF=/etc/homerepo/homerepo.conf
+Environment=HOME=/var/lib/homerepo
+Environment=LANG=C.UTF-8
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m homerepo.web
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homerepo
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

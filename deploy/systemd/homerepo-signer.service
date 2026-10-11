@@ -1,0 +1,37 @@
+[Unit]
+Description=HomeRepo signer: подпись пакетов, публикация и метаданные репозитория
+After=network.target
+
+[Service]
+Type=simple
+User=homerepo-signer
+Group=homerepo-signer
+SupplementaryGroups=homerepo
+UMask=0002
+Environment=PYTHONPATH=/opt/homerepo/lib
+Environment=HOMEREPO_CONF=/etc/homerepo/homerepo.conf
+Environment=HOME=/var/lib/homerepo-signer
+Environment=LANG=C.UTF-8
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m homerepo.signer
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+
+# изоляция: служба видит систему только для чтения, пишет только в свои каталоги
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homerepo /var/lib/homerepo-signer @REPO_ROOT@
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
