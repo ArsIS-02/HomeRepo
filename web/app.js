@@ -1132,7 +1132,7 @@ async function vConnect(main) {
 const AUD_RU = {
   login: 'вход', login_failed: 'неудачный вход', logout: 'выход', password_changed: 'смена пароля', upload: 'загрузка пакета', fetch: 'скачивание по ссылке',
   package_resign: 'переподпись', resign_foreign: 'переподпись чужих', package_delete: 'удаление пакетов', package_move: 'перемещение пакетов',
-  repo_metadata: 'пересборка метаданных', repo_rescan: 'сканирование', repo_cleanup: 'очистка мусора', repo_key: 'проверка ключа', job_cancel: 'отмена задания',
+  repo_metadata: 'пересборка метаданных', repo_rescan: 'пересканирование репозитория', repo_cleanup: 'очистка мусора', repo_key: 'проверка ключа', job_cancel: 'отмена задания',
   assign: 'назначение', task_cancel: 'отмена назначения', task_retry: 'повтор назначения', collect: 'забрать в HomeRepo', collect_upload: 'пакет от агента',
   host_enroll: 'подключение устройства', host_delete: 'удаление устройства', token_create: 'токен создан', token_delete: 'токен удалён',
   report: 'просмотр отчёта', errors_ack: 'ошибки скрыты', job_retry: 'повтор задания', device_os: 'указана система устройства', scan: 'сканирование сети', scan_clear: 'очистка найденных', ssh_install_start: 'установка агента по SSH', ssh_install: 'результат установки по SSH', ssh_key_create: 'создан SSH-ключ панели',
@@ -1143,11 +1143,11 @@ async function vLog(main) {
   async function draw() {
     const r = await GET('/api/audit?limit=300&q=' + encodeURIComponent(q));
     const body = r.audit.map((a) => `<tr><td class="muted">${fmtDT(a.ts)}</td><td>${esc(a.user || '—')}</td><td class="muted">${esc(a.ip || '')}</td>
-      <td class="${a.action === 'login_failed' ? 'c-bad' : ''}">${esc(AUD_RU[a.action] || a.action)}</td><td class="wrap small">${esc(a.detail || '')}</td></tr>`).join('');
+      <td class="nowrap ${a.action === 'login_failed' ? 'c-bad' : ''}">${esc(a.label || AUD_RU[a.action] || a.action)}</td><td class="wrap small"${a.detail && a.detail !== a.text ? ` title="${esc(a.detail)}"` : ''}>${esc(a.text != null ? a.text : (a.detail || ''))}</td></tr>`).join('');
     $('#lb', main).innerHTML = body || '<tr><td colspan="5" class="empty">записей нет</td></tr>';
   }
   main.innerHTML = `<section class="panel"><div class="bar"><b style="font-size:14px;letter-spacing:.1em;color:var(--cyan)">ЖУРНАЛ ДЕЙСТВИЙ</b><div class="grow"></div>
-    <input class="inp" style="flex:0 1 320px" placeholder="Поиск: пользователь, действие, адрес" data-in="lq"></div>
+    <input class="inp" style="flex:0 1 460px" placeholder="Поиск: пользователь, действие, адрес, пакет, устройство" data-in="lq"></div>
     <div class="tblwrap"><table class="t"><thead><tr><th>Когда</th><th>Кто</th><th>Откуда</th><th>Действие</th><th>Подробности</th></tr></thead><tbody id="lb"></tbody></table></div></section>`;
   let t;
   S.on.lq = (el) => { clearTimeout(t); t = setTimeout(() => { q = el.value; draw().catch(fail); }, 300); };

@@ -247,7 +247,13 @@ def _resp(doc, fn, req):
 @route("GET", r"/api/report/host/(\d+)\.html")
 def report_host(req, hid):
     doc, fn = host_html(web.C(), hid, full=bool(req.query.get("full")))
-    web.audit(req, "report", "устройство #%s" % hid)
+    # печать и скачивание открывают отчёт ещё раз — повторный просмотр в течение 10 минут не пишем
+    con = web.C()
+    det = "устройство #%s" % hid
+    last = con.execute("SELECT ts FROM audit WHERE user=? AND action='report' AND detail=? ORDER BY id DESC LIMIT 1",
+                       (req.uname, det)).fetchone()
+    if not last or time.time() - last[0] > 600:
+        web.audit(req, "report", det)
     return _resp(doc, fn, req)
 
 
