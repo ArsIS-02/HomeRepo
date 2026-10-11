@@ -1,0 +1,29 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверка версии
+        run: |
+          V=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' lib/homerepo/__init__.py)
+          [ "v$V" = "$GITHUB_REF_NAME" ] || { echo "тег $GITHUB_REF_NAME не совпадает с VERSION $V"; exit 1; }
+          echo "V=$V" >> "$GITHUB_ENV"
+      - name: Архив
+        run: |
+          git archive --format=tar.gz --prefix="homerepo-$V/" -o "homerepo-$V.tar.gz" HEAD
+          cp "homerepo-$V.tar.gz" homerepo.tar.gz
+          sha256sum "homerepo-$V.tar.gz" homerepo.tar.gz > SHA256SUMS
+      - name: Описание выпуска
+        run: |
+          awk -v v="## $V" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          printf '\nУстановка: см. [руководство](https://github.com/%s/blob/%s/docs/GUIDE.md).\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> notes.md
+      - name: Выпуск
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" "homerepo-$V.tar.gz" homerepo.tar.gz SHA256SUMS --title "HomeRepo $V" --notes-file notes.md

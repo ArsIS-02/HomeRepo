@@ -1,0 +1,147 @@
+#!/usr/bin/python3
+# TEST STUB ONLY: minimal createrepo_c replacement for the test chroot
+# (real servers use the createrepo_c package). Supports: [--update] [-q] [--workers N] DIR
+import gzip, hashlib, os, shutil, struct, sys, time
+from xml.sax.saxutils import escape as xe
+import rpm
+
+args = [a for a in sys.argv[1:]]
+dirs = []
+skip = False
+for i, a in enumerate(args):
+    if skip:
+        skip = False
+        continue
+    if a in ("--workers", "--general-compress-type", "--checksum"):
+        skip = True
+        continue
+    if a.startswith("-"):
+        continue
+    dirs.append(a)
+if len(dirs) != 1:
+    print("usage: createrepo_c [opts] DIR", file=sys.stderr)
+    sys.exit(2)
+root = os.path.abspath(dirs[0])
+
+ts = rpm.TransactionSet()
+ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES | rpm._RPMVSF_NODIGESTS)
+
+
+def attr(s):
+    return xe(s or "", {'"': "&quot;"})
+
+
+def hdr_range(path):
+    with open(path, "rb") as f:
+        f.seek(96)
+        h = f.read(16)
+        il, dl = struct.unpack(">II", h[8:16])
+        sigsize = 16 + il * 16 + dl
+        sigsize += (8 - sigsize % 8) % 8
+        start = 96 + sigsize
+        f.seek(start)
+        h = f.read(16)
+        il, dl = struct.unpack(">II", h[8:16])
+        return start, start + 16 + il * 16 + dl
+
+
+FL = {2: "LT", 4: "GT", 8: "EQ", 10: "LE", 12: "GE"}
+
+
+def deps(h, n, fl, ver, tag, skip_rpmlib=False):
+    names = h[n] or []
+    flags = h[fl] or []
+    vers = h[ver] or []
+    out = []
+    for i, nm in enumerate(names):
+        nm = nm.decode() if isinstance(nm, bytes) else nm
+        if skip_rpmlib and nm.startswith("rpmlib("):
+            continue
+        f = flags[i] & 0xF if i < len(flags) else 0
+        v = vers[i] if i < len(vers) else ""
+        v = v.decode() if isinstance(v, bytes) else v
+        e = '  <rpm:entry name="%s"' % attr(nm)
+        if f in FL and v:
+            ep, _, rest = v.rpartition(":") if ":" in v else ("0", "", v)
+            vv, _, rr = rest.partition("-")
+            e += ' flags="%s" epoch="%s" ver="%s"' % (FL[f], attr(ep or "0"), attr(vv))
+            if rr:
+                e += ' rel="%s"' % attr(rr)
+        out.append(e + "/>")
+    if not out:
+        return ""
+    return "<rpm:%s>\n%s\n</rpm:%s>\n" % (tag, "\n".join(out), tag)
+
+
+prim, fil, oth = [], [], []
+for name in sorted(os.listdir(root)):
+    if not name.endswith(".rpm"):
+        continue
+    p = os.path.join(root, name)
+    with open(p, "rb") as f:
+        data = f.read()
+    sha = hashlib.sha256(data).hexdigest()
+    fd = os.open(p, os.O_RDONLY)
+    try:
+        h = ts.hdrFromFdno(fd)
+    finally:
+        os.close(fd)
+    g = lambda t: (h[t].decode() if isinstance(h[t], bytes) else (h[t] or ""))
+    ep = str(h[rpm.RPMTAG_EPOCH] or 0)
+    s, e = hdr_range(p)
+    files = [x.decode() if isinstance(x, bytes) else x for x in (h[rpm.RPMTAG_FILENAMES] or [])]
+    ver = '<version epoch="%s" ver="%s" rel="%s"/>' % (ep, attr(g(rpm.RPMTAG_VERSION)), attr(g(rpm.RPMTAG_RELEASE)))
+    arch = "src" if h[rpm.RPMTAG_SOURCEPACKAGE] else g(rpm.RPMTAG_ARCH)
+    prim.append(
+        '<package type="rpm"><name>%s</name><arch>%s</arch>%s<checksum type="sha256" pkgid="YES">%s</checksum>'
+        "<summary>%s</summary><description>%s</description><packager>%s</packager><url>%s</url>"
+        '<time file="%d" build="%d"/><size package="%d" installed="%d" archive="0"/><location href="%s"/>'
+        "<format><rpm:license>%s</rpm:license><rpm:vendor>%s</rpm:vendor><rpm:group>%s</rpm:group>"
+        '<rpm:buildhost>%s</rpm:buildhost><rpm:sourcerpm>%s</rpm:sourcerpm><rpm:header-range start="%d" end="%d"/>\n%s%s%s%s%s</format></package>'
+        % (
+            xe(g(rpm.RPMTAG_NAME)), arch, ver, sha, xe(g(rpm.RPMTAG_SUMMARY)), xe(g(rpm.RPMTAG_DESCRIPTION)),
+            xe(g(rpm.RPMTAG_PACKAGER)), xe(g(rpm.RPMTAG_URL)), int(os.stat(p).st_mtime), int(h[rpm.RPMTAG_BUILDTIME] or 0),
+            len(data), int(h[rpm.RPMTAG_SIZE] or 0), attr(name), xe(g(rpm.RPMTAG_LICENSE)), xe(g(rpm.RPMTAG_VENDOR)),
+            xe(g(rpm.RPMTAG_GROUP)), xe(g(rpm.RPMTAG_BUILDHOST)), xe(g(rpm.RPMTAG_SOURCERPM)), s, e,
+            deps(h, rpm.RPMTAG_PROVIDENAME, rpm.RPMTAG_PROVIDEFLAGS, rpm.RPMTAG_PROVIDEVERSION, "provides"),
+            deps(h, rpm.RPMTAG_REQUIRENAME, rpm.RPMTAG_REQUIREFLAGS, rpm.RPMTAG_REQUIREVERSION, "requires", True),
+            deps(h, rpm.RPMTAG_CONFLICTNAME, rpm.RPMTAG_CONFLICTFLAGS, rpm.RPMTAG_CONFLICTVERSION, "conflicts"),
+            deps(h, rpm.RPMTAG_OBSOLETENAME, rpm.RPMTAG_OBSOLETEFLAGS, rpm.RPMTAG_OBSOLETEVERSION, "obsoletes"),
+            "".join("<file>%s</file>\n" % xe(x) for x in files),
+        )
+    )
+    fil.append('<package pkgid="%s" name="%s" arch="%s">%s%s</package>' % (
+        sha, attr(g(rpm.RPMTAG_NAME)), arch, ver, "".join("<file>%s</file>" % xe(x) for x in files)))
+    oth.append('<package pkgid="%s" name="%s" arch="%s">%s</package>' % (sha, attr(g(rpm.RPMTAG_NAME)), arch, ver))
+
+n = len(prim)
+docs = {
+    "primary": '<?xml version="1.0" encoding="UTF-8"?>\n<metadata xmlns="http://linux.duke.edu/metadata/common" '
+    'xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="%d">\n%s\n</metadata>\n' % (n, "\n".join(prim)),
+    "filelists": '<?xml version="1.0" encoding="UTF-8"?>\n<filelists xmlns="http://linux.duke.edu/metadata/filelists" '
+    'packages="%d">\n%s\n</filelists>\n' % (n, "\n".join(fil)),
+    "other": '<?xml version="1.0" encoding="UTF-8"?>\n<otherdata xmlns="http://linux.duke.edu/metadata/other" '
+    'packages="%d">\n%s\n</otherdata>\n' % (n, "\n".join(oth)),
+}
+tmp = os.path.join(root, ".repodata")
+shutil.rmtree(tmp, ignore_errors=True)
+os.makedirs(tmp)
+now = int(time.time())
+parts = []
+for kind, xml in docs.items():
+    raw = xml.encode()
+    gz = gzip.compress(raw)
+    gsha = hashlib.sha256(gz).hexdigest()
+    fn = "%s-%s.xml.gz" % (gsha, kind)
+    with open(os.path.join(tmp, fn), "wb") as f:
+        f.write(gz)
+    parts.append(
+        '<data type="%s"><checksum type="sha256">%s</checksum><open-checksum type="sha256">%s</open-checksum>'
+        '<location href="repodata/%s"/><timestamp>%d</timestamp><size>%d</size><open-size>%d</open-size></data>'
+        % (kind, gsha, hashlib.sha256(raw).hexdigest(), fn, now, len(gz), len(raw)))
+with open(os.path.join(tmp, "repomd.xml"), "w") as f:
+    f.write('<?xml version="1.0" encoding="UTF-8"?>\n<repomd xmlns="http://linux.duke.edu/metadata/repo" '
+            'xmlns:rpm="http://linux.duke.edu/metadata/rpm">\n<revision>%d</revision>\n%s\n</repomd>\n' % (now, "\n".join(parts)))
+old = os.path.join(root, "repodata")
+shutil.rmtree(old, ignore_errors=True)
+os.rename(tmp, old)
