@@ -81,6 +81,14 @@ def collect(con, include_ack=False):
         tasks.append({"id": t["id"], "host": t["host"], "host_id": t["host_id"], "action": ACT_RU.get(t["action"], t["action"]),
                       "name": t["name"], "evr": t["evr"] or "", "output": t["output"] or "", "who": t["created_by"],
                       "ts": t["finished"] or t["created"], "ack": t["ack"], "hint": hint(t["output"] or "")})
+    ackq = "" if include_ack else " AND ack=0"
+    runs = []
+    for r in db.rows(con.execute("SELECT id, name, mode, message, created_by, created, finished, ack, playbook_id FROM runs "
+                                 "WHERE status='failed' AND coalesce(finished, created)>?%s ORDER BY id DESC LIMIT 300"
+                                 % ackq, (since,))):
+        runs.append({"id": r["id"], "title": r["name"], "mode": r["mode"], "message": r["message"] or "",
+                     "who": r["created_by"], "ts": r["finished"] or r["created"], "ack": r["ack"],
+                     "playbook_id": r["playbook_id"], "hint": run_hint(r["message"] or "")})
     system = []
     s = web.signer_state(con)
     if not s.get("alive"):
@@ -91,8 +99,22 @@ def collect(con, include_ack=False):
     if k.get("error"):
         system.append({"title": "Ключ подписи недоступен", "message": k["error"],
                        "hint": "Проверьте каталог ключа и signer.key_id в /etc/homerepo/homerepo.conf."})
-    return {"system": system, "jobs": jobs, "tasks": tasks,
-            "count": len(system) + sum(1 for j in jobs if not j["ack"]) + sum(1 for t in tasks if not t["ack"])}
+    return {"system": system, "jobs": jobs, "tasks": tasks, "runs": runs,
+            "count": len(system) + sum(1 for j in jobs if not j["ack"]) + sum(1 for t in tasks if not t["ack"])
+            + sum(1 for r in runs if not r["ack"])}
+
+
+def run_hint(msg):
+    m = msg.lower()
+    if "ansible не установлен" in m:
+        return "Установите Ansible на сервер HomeRepo: dnf install ansible (или ansible-core)."
+    if "с ошибками" in m or "unreachable" in m:
+        return "Откройте запуск: в сетке видно, на каком хосте и шаге ошибка. Недоступный хост — проверьте «Доступ Ansible»."
+    if "синтакс" in m or "syntax" in m:
+        return "Ошибка в YAML плейбука — проверьте отступы и имена модулей."
+    if "прервано" in m:
+        return "Исполнитель перезапускался во время выполнения — запустите плейбук снова."
+    return "Откройте запуск и посмотрите вывод Ansible."
 
 
 @route("GET", "/api/errors")
@@ -101,8 +123,9 @@ def api_errors(req):
     if req.query.get("count"):
         since = time.time() - KEEP_DAYS * 86400
         n = con.execute("SELECT (SELECT count(*) FROM jobs WHERE status='error' AND ack=0 AND coalesce(finished,created)>?)"
-                        " + (SELECT count(*) FROM tasks WHERE status='error' AND ack=0 AND coalesce(finished,created)>?)",
-                        (since, since)).fetchone()[0]
+                        " + (SELECT count(*) FROM tasks WHERE status='error' AND ack=0 AND coalesce(finished,created)>?)"
+                        " + (SELECT count(*) FROM runs WHERE status='failed' AND ack=0 AND coalesce(finished,created)>?)",
+                        (since, since, since)).fetchone()[0]
         s = web.signer_state(con)
         k = db.get_setting(con, "key", {}) or {}
         return jresp({"count": n + (0 if s.get("alive") else 1) + (1 if k.get("error") else 0)})
@@ -116,15 +139,19 @@ def api_errors_ack(req):
     if d.get("all"):
         a = con.execute("UPDATE jobs SET ack=1 WHERE status='error' AND ack=0").rowcount
         b = con.execute("UPDATE tasks SET ack=1 WHERE status='error' AND ack=0").rowcount
-        web.audit(req, "errors_ack", "все: %d" % (a + b))
-        return jresp({"ok": True, "hidden": a + b})
+        c = con.execute("UPDATE runs SET ack=1 WHERE status='failed' AND ack=0").rowcount
+        web.audit(req, "errors_ack", "все: %d" % (a + b + c))
+        return jresp({"ok": True, "hidden": a + b + c})
     jobs = [int(x) for x in d.get("jobs") or []]
     tasks = [int(x) for x in d.get("tasks") or []]
+    runs = [int(x) for x in d.get("runs") or []]
     for i in jobs:
         con.execute("UPDATE jobs SET ack=1 WHERE id=? AND status='error'", (i,))
     for i in tasks:
         con.execute("UPDATE tasks SET ack=1 WHERE id=? AND status='error'", (i,))
-    web.audit(req, "errors_ack", {"jobs": jobs, "tasks": tasks})
+    for i in runs:
+        con.execute("UPDATE runs SET ack=1 WHERE id=? AND status='failed'", (i,))
+    web.audit(req, "errors_ack", {"jobs": jobs, "tasks": tasks, "runs": runs})
     return jresp({"ok": True})
 
 
@@ -180,5 +207,11 @@ def report_errors(req):
         % (dt(x["ts"]), e(x["host"]), e(x["action"]), e(x["name"]), e(x["evr"]),
            e((x["output"] or "")[-600:]), " <span class='tag'>скрыто</span>" if x["ack"] else "", e(x["hint"]))
         for x in d["tasks"]) or "<tr><td colspan=5 class='muted'>нет</td></tr>"))
+    out.append("<h2>Запуски плейбуков · %d</h2>" % len(d["runs"]))
+    out.append("<table><tr><th>Когда</th><th>Плейбук</th><th>Кто</th><th>Итог</th><th>Что сделать</th></tr>%s</table>" % ("".join(
+        "<tr><td>%s</td><td>%s <span class='muted'>#%s</span></td><td>%s</td><td class='small'>%s%s</td><td class='small'>%s</td></tr>"
+        % (dt(x["ts"]), e(x["title"]), x["id"], e(x["who"]), e(x["message"]),
+           " <span class='tag'>скрыто</span>" if x["ack"] else "", e(x["hint"])) for x in d["runs"])
+        or "<tr><td colspan=5 class='muted'>нет</td></tr>"))
     fn = "homerepo-errors-%s.html" % time.strftime("%Y%m%d-%H%M")
     return reports._resp(reports.page("HomeRepo: ошибки", "".join(out), fn), fn, req)

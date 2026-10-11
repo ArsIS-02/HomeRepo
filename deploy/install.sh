@@ -13,6 +13,7 @@
 #   --import-key FILE    взять готовый секретный ключ из файла (gpg --armor --export-secret-keys …)
 #   --key-name "Имя <почта>"  владелец нового ключа, если ключ создаётся (по умолчанию «HomeRepo signing key»)
 #                        Если ключа нет нигде, установщик создаст новый (RSA 4096, без пароля, только у службы подписи).
+#   --no-ansible         не ставить Ansible (раздел «Плейбуки» останется, но запускать будет нечем)
 #   --yes                не спрашивать подтверждение
 #
 # Повторный запуск безопасен: обновляет код и службы, данные и пользователей не трогает.
@@ -23,7 +24,7 @@ HR_VERSION="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "$SRC/lib/homerepo/__init__.py
 WEB="nginx"; WEB_FORCED=0
 REPO_URL=""; REPO_ROOT="/var/www/html/repos/homerepo"; KEY_ID=""; OLD_GNUPG="/usr/share/httpd/.gnupg"
 IMPORT_KEY=""; KEY_NAME=""; KEY_MODE=""
-CHECK=0; YES=0
+CHECK=0; YES=0; NO_ANSIBLE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --web) WEB="$2"; WEB_FORCED=1; shift 2 ;;
@@ -34,8 +35,9 @@ while [ $# -gt 0 ]; do
     --import-key) IMPORT_KEY="$2"; shift 2 ;;
     --key-name) KEY_NAME="$2"; shift 2 ;;
     --check) CHECK=1; shift ;;
+    --no-ansible) NO_ANSIBLE=1; shift ;;
     --yes|-y) YES=1; shift ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "неизвестный параметр: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,6 +56,7 @@ BACKUP="/var/backups/homerepo-$TS"
 CONF=/etc/homerepo/homerepo.conf
 STATE=/var/lib/homerepo
 SIGNER_HOME=/var/lib/homerepo-signer
+RUNNER_HOME=/var/lib/homerepo-runner
 GNUPG_NEW="$SIGNER_HOME/gnupg"
 TLS_DIR=/etc/homerepo/tls
 
@@ -75,8 +78,24 @@ command -v ssh >/dev/null && command -v ssh-keygen >/dev/null || NEED_PKGS+=(ope
 python3 -c 'import hashlib; hashlib.scrypt(b"x", salt=b"y", n=16, r=8, p=1)' 2>/dev/null || die "в Python нет hashlib.scrypt (нужен OpenSSL 1.1+)"
 [ ${#NEED_PKGS[@]} -eq 0 ] && ok "rpm, createrepo_c, gnupg2, openssl, ssh на месте" || warn "будут установлены: ${NEED_PKGS[*]}"
 
+# Ansible для раздела «Плейбуки»
+ANSIBLE_PKG=""
+if command -v ansible-playbook >/dev/null; then
+  ok "Ansible: $(ansible-playbook --version 2>/dev/null | head -1)"
+elif [ $NO_ANSIBLE = 1 ]; then
+  warn "Ansible не установлен и не будет ставиться (--no-ansible): плейбуки запускать будет нечем"
+else
+  for p in ansible ansible-core; do dnf -q list --available "$p" >/dev/null 2>&1 && { ANSIBLE_PKG=$p; break; }; done
+  [ -n "$ANSIBLE_PKG" ] && warn "будет установлен $ANSIBLE_PKG (для раздела «Плейбуки»; не нужен — --no-ansible)" \
+    || warn "пакета ansible в подключённых репозиториях нет — раздел «Плейбуки» заработает после dnf install ansible-core"
+fi
+
 # старая система
 OLD_PANEL=""; [ -d /var/www/html/repos-web ] && OLD_PANEL=/var/www/html/repos-web
+OLD_ANSIBLE=""; [ -f /etc/systemd/system/repo-panel.service ] && OLD_ANSIBLE=repo-panel
+OLD_PLAYBOOKS=$(ls /opt/ansible-repo/playbooks/*.yml /opt/ansible-repo/playbooks/*.yaml 2>/dev/null | tr '\n' ' ' || true)
+[ -n "$OLD_ANSIBLE" ] && warn "найдена старая веб-панель Ansible (служба repo-panel, порт 5000) — будет отключена: её делает раздел «Плейбуки»"
+[ -n "$OLD_PLAYBOOKS" ] && warn "плейбуки из /opt/ansible-repo/playbooks будут импортированы в раздел «Плейбуки» (файлы остаются на месте)"
 [ -n "$OLD_PANEL" ] && warn "найдена старая PHP-панель $OLD_PANEL — будет отключена и перенесена в резервную копию"
 [ -d "$REPO_ROOT" ] && ok "репозиторий: $REPO_ROOT ($(find "$REPO_ROOT" -name '*.rpm' -type f 2>/dev/null | wc -l) RPM, $(du -sh "$REPO_ROOT" 2>/dev/null | cut -f1))" \
   || warn "каталога $REPO_ROOT нет — будет создан пустой репозиторий"
@@ -179,11 +198,11 @@ echo
 cat <<EOF
 План:
   1. резервная копия старой системы → $BACKUP
-  2. пользователи homerepo (панель) и homerepo-signer (подпись), код в /opt/homerepo
+  2. пользователи homerepo (панель), homerepo-signer (подпись), homerepo-runner (плейбуки Ansible), код в /opt/homerepo
   3. ключ подписи ($KEY_MODE_RU) в $GNUPG_NEW, права на репозиторий — homerepo-signer
-  4. службы homerepo-signer и homerepo-web, сертификат для HTTPS
+  4. службы homerepo-signer, homerepo-web и homerepo-runner, сертификат для HTTPS${ANSIBLE_PKG:+, пакет $ANSIBLE_PKG}
   5. веб-сервер: $WEB
-  6. отключение старой системы, если она есть: PHP-панель repos-web, таймер update-homerepo, sudo для apache
+  6. отключение старой системы, если она есть: PHP-панель repos-web, панель Ansible repo-panel, таймер update-homerepo, sudo для apache
   7. пересканирование репозитория, пересборка и подпись метаданных
 Пакеты и адреса репозитория для клиентов не меняются.
 EOF
@@ -202,10 +221,11 @@ echo "Откат: sudo $SRC/deploy/rollback.sh $BACKUP" > "$ROLLBACK_NOTE"
 say "1. резервная копия → $BACKUP"
 for f in /etc/httpd/conf.d/repos-web.conf /etc/httpd/conf.d/homerepo.conf /etc/httpd/conf.d/ssl.conf \
          /etc/systemd/system/update-homerepo.service /etc/systemd/system/update-homerepo.timer \
-         /etc/nginx/nginx.conf /etc/nginx/conf.d/homerepo.conf /etc/php-fpm.d/www.conf $SUDO_FILES; do
+         /etc/nginx/nginx.conf /etc/nginx/conf.d/homerepo.conf /etc/php-fpm.d/www.conf \
+         /etc/systemd/system/repo-panel.service $SUDO_FILES; do
   [ -f "$f" ] && { mkdir -p "$BACKUP/files$(dirname "$f")"; cp -a "$f" "$BACKUP/files$f"; }
 done
-for s in httpd nginx php-fpm update-homerepo.timer; do
+for s in httpd nginx php-fpm update-homerepo.timer repo-panel; do
   printf '%s %s %s\n' "$s" "$(systemctl is-enabled "$s" 2>/dev/null || echo none)" "$(systemctl is-active "$s" 2>/dev/null || echo inactive)"
 done > "$BACKUP/services.txt"
 if [ "$KEY_MODE" = import ]; then
@@ -223,6 +243,12 @@ getent group homerepo >/dev/null || groupadd -r homerepo
 id homerepo >/dev/null 2>&1 || useradd -r -g homerepo -d "$STATE" -s /sbin/nologin -c "HomeRepo panel" homerepo
 id homerepo-signer >/dev/null 2>&1 || useradd -r -U -d "$SIGNER_HOME" -s /sbin/nologin -c "HomeRepo signer" homerepo-signer
 usermod -aG homerepo homerepo-signer
+id homerepo-runner >/dev/null 2>&1 || useradd -r -U -d "$RUNNER_HOME" -s /sbin/nologin -c "HomeRepo Ansible runner" homerepo-runner
+usermod -aG homerepo homerepo-runner
+if [ -n "$ANSIBLE_PKG" ]; then
+  dnf -y -q install "$ANSIBLE_PKG" >/dev/null 2>&1 && ok "установлен $ANSIBLE_PKG: $(ansible-playbook --version 2>/dev/null | head -1)" \
+    || warn "не удалось установить $ANSIBLE_PKG — поставьте позже: dnf install ansible-core"
+fi
 install -d -m 755 /opt/homerepo
 rm -rf /opt/homerepo/lib /opt/homerepo/web /opt/homerepo/agent
 cp -a "$SRC/lib" "$SRC/web" "$SRC/agent" /opt/homerepo/
@@ -230,7 +256,9 @@ mkdir -p /opt/homerepo/deploy && cp -a "$SRC/deploy/rollback.sh" /opt/homerepo/d
 find /opt/homerepo -name __pycache__ -prune -exec rm -rf {} +
 chown -R root:root /opt/homerepo; chmod -R u=rwX,go=rX /opt/homerepo
 install -m 755 "$SRC/bin/homerepo" /usr/local/bin/homerepo
-install -d -m 2770 -o root -g homerepo "$STATE" "$STATE/incoming"
+install -m 755 "$SRC/bin/homerepo-inventory" /usr/local/bin/homerepo-inventory
+install -d -m 2770 -o root -g homerepo "$STATE" "$STATE/incoming" "$STATE/run-secrets"
+install -d -m 700 -o homerepo-runner -g homerepo-runner "$RUNNER_HOME"
 install -d -m 700 -o homerepo-signer -g homerepo-signer "$SIGNER_HOME" "$GNUPG_NEW"
 ok "код в /opt/homerepo, команда homerepo"
 
@@ -314,12 +342,12 @@ fi
 CRT=$(conf_get ca_file); CRT=${CRT:-$TLS_DIR/server.crt}
 KEY="${CRT%.crt}.key"; [ -f "$KEY" ] || KEY="$TLS_DIR/server.key"
 
-for u in homerepo-signer homerepo-web; do
+for u in homerepo-signer homerepo-web homerepo-runner; do
   sed "s#@REPO_ROOT@#$REPO_ROOT#g" "$SRC/deploy/systemd/$u.service" > "/etc/systemd/system/$u.service"
 done
 systemctl daemon-reload
 for d in "$STATE"/homerepo.db*; do [ -f "$d" ] && chown homerepo:homerepo "$d" && chmod 660 "$d"; done
-systemctl enable -q homerepo-signer homerepo-web
+systemctl enable -q homerepo-signer homerepo-web homerepo-runner
 systemctl restart homerepo-signer homerepo-web
 for i in $(seq 1 30); do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/me" || true)
@@ -327,6 +355,10 @@ for i in $(seq 1 30); do
 done
 [ "${code:-}" = 401 ] || { journalctl -u homerepo-web -n 30 --no-pager; die "панель не запустилась"; }
 systemctl is-active -q homerepo-signer || { journalctl -u homerepo-signer -n 30 --no-pager; die "служба подписи не запустилась"; }
+systemctl restart homerepo-runner
+sleep 2
+systemctl is-active -q homerepo-runner && ok "исполнитель плейбуков работает (ключ: $RUNNER_HOME/.ssh/id_ed25519)" \
+  || warn "исполнитель плейбуков не запустился: journalctl -u homerepo-runner -n 30"
 ok "службы работают"
 ADMIN_PW=""
 if [ "$(runuser -u homerepo -- env PYTHONPATH=/opt/homerepo/lib HOMEREPO_CONF=$CONF python3 -c 'from homerepo import config, db; c=db.init(config.get().db_path); print(c.execute("select count(*) from users").fetchone()[0])')" = 0 ]; then
@@ -399,6 +431,13 @@ for f in $SUDO_FILES; do
   if visudo -cf "$tmp" >/dev/null; then cat "$tmp" > "$f"; ok "sudo для apache отключён в $f"; else warn "$f: проверка visudo не прошла, оставлен как есть"; fi
   rm -f "$tmp"
 done
+if [ -n "$OLD_ANSIBLE" ]; then
+  systemctl disable --now repo-panel 2>/dev/null && ok "старая панель Ansible (repo-panel, порт 5000) остановлена и отключена; файлы /opt/repo-panel не тронуты" || true
+fi
+if [ -n "$OLD_PLAYBOOKS" ]; then
+  /usr/local/bin/homerepo playbook import $OLD_PLAYBOOKS 2>&1 | sed 's/^/    /' || true
+  [ -f /opt/ansible-repo/inventories/hosts.ini ] && ok "список хостов теперь берётся из HomeRepo; старый инвентарь: /opt/ansible-repo/inventories/hosts.ini (для командной строки: homerepo-inventory)"
+fi
 if [ -n "$OLD_PANEL" ]; then
   mv "$OLD_PANEL" "$BACKUP/repos-web" && ok "старая панель перенесена в $BACKUP/repos-web (там пароли и журналы — каталог доступен только root)"
 fi

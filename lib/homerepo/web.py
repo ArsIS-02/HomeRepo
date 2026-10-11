@@ -131,6 +131,7 @@ class App:
         self.cfg = cfg
         db.init(cfg.db_path).close()
         os.makedirs(cfg.incoming_dir, exist_ok=True)
+        os.makedirs(cfg.secrets_dir, exist_ok=True)
         self.lock = threading.Lock()
 
     def con(self):
@@ -771,6 +772,13 @@ def host_detail(con, hid, hours=24):
     h["facts"] = json.loads(h.get("facts") or "{}")
     h["hw"] = json.loads(h.get("hw") or "{}")
     h["metrics"] = json.loads(h.get("metrics") or "null")
+    h["os_updates"] = inventory.os_updates_of(h)
+    from . import ansibleapi
+    ri = ansibleapi.runner_info(con)
+    h["ansible_access"] = ansibleapi.access_of(h, ri["fingerprint"])
+    h["ansible_access"]["local"] = (h.get("ip") or "") in ansibleapi.LOCAL_IPS
+    h["ansible_access"]["remote_user"] = ri["remote_user"]
+    h.pop("ansible", None)
     since = time.time() - hours * 3600
     hist = con.execute("SELECT ts, cpu, mem, swap, load1, disk, temp FROM host_metrics WHERE host_id=? AND ts>? "
                        "ORDER BY ts", (h["id"], since)).fetchall()
@@ -843,7 +851,7 @@ def api_host_collect(req, hid):
 
 
 # ====================================================================== назначения
-ACTIONS = ("install", "update", "remove", "hold", "unhold")
+ACTIONS = ("install", "update", "remove", "hold", "unhold", "upgrade")
 
 
 @route("GET", "/api/tasks")
@@ -869,6 +877,10 @@ def api_tasks_create(req):
         raise HTTPError(400, "неизвестное действие")
     items = d.get("items") or []
     host_ids = d.get("hosts") or []
+    if action == "upgrade":
+        # обновление системы целиком: пакеты не выбираются
+        items = [{"name": "обновления безопасности" if d.get("security") else "все обновления"}]
+        up_params = {"security": bool(d.get("security")), "reboot": bool(d.get("reboot"))}
     if not items or not host_ids:
         raise HTTPError(400, "выберите пакеты и устройства")
     sched = d.get("schedule") or "now"
@@ -911,6 +923,8 @@ def api_tasks_create(req):
                     con.execute("UPDATE tasks SET status='cancelled', finished=?, output='заменено новым назначением' "
                                 "WHERE id=?", (now, dup["id"]))
                 params = {"switch": True} if (action == "install" and it.get("switch")) else {}
+                if action == "upgrade":
+                    params = up_params
                 con.execute("INSERT INTO tasks(batch, host_id, action, name, evr, arch, params, schedule, not_before, "
                             "created_by, created) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                             (batch, h["id"], action, name, evr, arch, json.dumps(params), sched, nb, req.uname, now))
@@ -1159,7 +1173,7 @@ def main():
     os.umask(0o002)
     cfg = config.get()
     APP = App(cfg)
-    from . import agentapi, errors, reports, scanner  # noqa: F401  (регистрируют свои маршруты)
+    from . import agentapi, ansibleapi, errors, reports, scanner  # noqa: F401  (регистрируют свои маршруты)
 
     threading.Thread(target=fetch_worker, daemon=True, name="fetch").start()
     fam = socket.AF_INET6 if ":" in cfg.listen else socket.AF_INET

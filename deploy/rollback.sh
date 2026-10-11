@@ -7,7 +7,7 @@ B="${1:-$(cat /var/backups/homerepo-last 2>/dev/null || true)}"
 [ "$(id -u)" = 0 ] || { echo "запустите от root" >&2; exit 1; }
 [ -n "$B" ] && [ -d "$B" ] || { echo "укажите каталог резервной копии /var/backups/homerepo-…" >&2; exit 1; }
 echo "==> откат из $B"
-systemctl disable --now homerepo-web homerepo-signer 2>/dev/null || true
+systemctl disable --now homerepo-runner homerepo-web homerepo-signer 2>/dev/null || true
 if [ -f /etc/nginx/conf.d/homerepo.conf ]; then
   rm -f /etc/nginx/conf.d/homerepo.conf
   systemctl disable --now nginx 2>/dev/null || true

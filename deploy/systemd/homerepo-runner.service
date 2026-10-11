@@ -1,0 +1,38 @@
+[Unit]
+Description=HomeRepo runner: выполнение плейбуков Ansible из панели
+After=network-online.target homerepo-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homerepo-runner
+Group=homerepo-runner
+SupplementaryGroups=homerepo
+UMask=0007
+Environment=PYTHONPATH=/opt/homerepo/lib
+Environment=HOMEREPO_CONF=/etc/homerepo/homerepo.conf
+Environment=HOME=/var/lib/homerepo-runner
+Environment=LANG=C.UTF-8
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m homerepo.runner
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillMode=mixed
+
+# исполнитель ходит на хосты по SSH; видит систему только для чтения, пишет только в свои каталоги
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homerepo /var/lib/homerepo-runner
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

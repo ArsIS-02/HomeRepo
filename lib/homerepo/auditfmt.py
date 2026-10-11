@@ -26,10 +26,15 @@ LABELS = {
     "ssh_key_create": "SSH-ключ панели",
     "user_create": "пользователь создан", "user_delete": "пользователь удалён", "user_role": "смена роли",
     "user_disable": "блокировка", "user_enable": "разблокировка", "user_reset_password": "сброс пароля",
+    "playbook_create": "плейбук создан", "playbook_save": "плейбук сохранён", "playbook_delete": "плейбук удалён",
+    "run_start": "запуск плейбука", "run_cancel": "остановка плейбука", "ansible_access": "доступ Ansible",
+    "errors_ack_runs": "ошибки скрыты",
 }
+RUN_MODE = {"check": "проверка без изменений", "run": "выполнение", "syntax": "проверка синтаксиса"}
 
 TASK_ACT = {"install": "установить или обновить", "update": "обновить", "remove": "удалить",
-            "hold": "держать текущую версию", "unhold": "снять фиксацию версии", "collect": "забрать в HomeRepo"}
+            "hold": "держать текущую версию", "unhold": "снять фиксацию версии", "collect": "забрать в HomeRepo",
+            "upgrade": "обновить систему:", "ansible_access": "доступ Ansible:"}
 SCHED = {"now": "при следующем опросе агента", "night": "ночью, 03:00–05:00", "at": "к заданному времени"}
 ROLES = {"viewer": "наблюдатель", "operator": "оператор", "admin": "администратор"}
 FAM = {"linux": "Linux", "windows": "Windows", "macos": "macOS", "router": "роутер", "nas": "NAS / хранилище",
@@ -127,11 +132,13 @@ def describe(action, detail, user="", ctx=None):
         if action == "errors_ack":
             if isinstance(d, dict):
                 parts = []
-                n = len(d.get("tasks") or []) + len(d.get("jobs") or [])
+                n = len(d.get("tasks") or []) + len(d.get("jobs") or []) + len(d.get("runs") or [])
                 if d.get("tasks"):
                     parts.append(("назначения " if n == 1 else "назначений ") + ", ".join("#%s" % x for x in d["tasks"]))
                 if d.get("jobs"):
                     parts.append(("задания службы подписи " if n == 1 else "заданий службы подписи ") + ", ".join("#%s" % x for x in d["jobs"]))
+                if d.get("runs"):
+                    parts.append(("запуска плейбука " if n == 1 else "запусков плейбуков ") + ", ".join("#%s" % x for x in d["runs"]))
                 return ("Скрыта ошибка " if n == 1 else "Скрыты ошибки ") + "; ".join(parts) if parts else "Ошибки скрыты"
             m = re.match(r"все: (\d+)", detail)
             if m:
@@ -230,6 +237,23 @@ def describe(action, detail, user="", ctx=None):
             m = re.match(r"^(\S+) → (\w+)$", detail)
             if m:
                 return "%s: новая роль «%s»" % (m.group(1), ROLES.get(m.group(2), m.group(2)))
+        if action == "run_start" and isinstance(d, dict):
+            hosts = d.get("hosts") or []
+            return "«%s» — %s%s%s" % (d.get("playbook", "?"), RUN_MODE.get(d.get("mode"), d.get("mode")),
+                                      " на " + _and(hosts) if hosts and hosts != ["localhost"] else "",
+                                      " (запуск #%s)" % d["run"] if d.get("run") else "")
+        if action == "run_cancel":
+            m = re.match(r"^#(\d+) (.*)$", detail)
+            if m:
+                return "Запуск #%s «%s» остановлен" % m.groups()
+        if action in ("playbook_create", "playbook_save", "playbook_delete") and detail:
+            return "«%s»" % detail
+        if action == "ansible_access" and isinstance(d, dict):
+            hosts = d.get("hosts") or []
+            if d.get("op") == "revoke":
+                return "Отозвать доступ Ansible на %s (пользователь %s)" % (_and(hosts), d.get("user", "?"))
+            return "Выдать доступ Ansible на %s: агент создаст пользователя %s с ключом исполнителя и sudo" % (
+                _and(hosts), d.get("user", "?"))
         if action == "login_failed":
             return "Неверное имя пользователя или пароль"
     except Exception:  # noqa: BLE001 — журнал не должен ломаться из-за одной странной записи

@@ -18,7 +18,7 @@ jobs:
         run: |
           python - <<'PY'
           import ast, glob
-          for f in glob.glob("lib/homerepo/*.py"):
+          for f in glob.glob("lib/homerepo/*.py") + glob.glob("lib/homerepo/ansible_plugins/callback/*.py"):
               ast.parse(open(f, encoding="utf-8").read(), feature_version=(3, 7))
           ast.parse(open("agent/homerepo-agent.py", encoding="utf-8").read(), feature_version=(3, 6))
           print("ok")
@@ -27,5 +27,6 @@ jobs:
         run: PYTHONPATH=lib python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Скрипты
         run: |
-          bash -n deploy/install.sh deploy/rollback.sh bin/homerepo lib/homerepo/askpass.sh
-          node --check web/app.js web/report.js
+          bash -n deploy/install.sh deploy/rollback.sh bin/homerepo bin/homerepo-inventory lib/homerepo/askpass.sh
+          for f in web/app.js web/report.js web/playbooks.js; do node --check "$f"; done
+          python -c "import json; json.load(open('web/manifest.webmanifest'))"
