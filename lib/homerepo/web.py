@@ -1047,6 +1047,96 @@ def api_audit(req):
     return jresp({"audit": rows})
 
 
+# ====================================================================== Graylog
+@route("GET", "/api/graylog", perm="admin")
+def api_graylog(req):
+    from . import gelf
+    snd = gelf.sender()
+    out = {"enabled": bool(snd), "export": bool(APP.cfg.export_token)}
+    if snd:
+        out.update({"target": "%s:%d/%s" % (snd.host, snd.port, snd.proto)}, **snd.status)
+    return jresp(out)
+
+
+@route("POST", "/api/graylog/test", perm="admin")
+def api_graylog_test(req):
+    from . import gelf
+    snd = gelf.sender()
+    if not snd:
+        raise HTTPError(400, "отправка в Graylog выключена: задайте gelf_host в секции [graylog] homerepo.conf")
+    try:
+        snd.send_now(gelf.message("HomeRepo: тестовое сообщение", {"hr_source": "homerepo", "homelab_app": "homerepo",
+                                                                   "hr_event": "test", "hr_user": req.uname or ""},
+                                  snd.source, 6))
+    except (OSError, ValueError) as e:
+        raise HTTPError(502, "Graylog недоступен: %s" % e)
+    return jresp({"ok": True})
+
+
+def inventory_rows(con, key="ip"):
+    """Устройства для справочников Graylog: агенты HomeRepo и найденные сканером.
+
+    Колонки: key, name, ip, os, origin, mac, vendor. key — адрес (key=ip) или имя (key=name;
+    для агентов строки и по короткому имени, и по FQDN). Данные агента важнее данных сканера.
+    """
+    from .auditfmt import FAM
+    by_ip, rows = {}, []
+    for h in db.rows(con.execute("SELECT name, fqdn, ip, os_name, os_version FROM hosts ORDER BY name")):
+        os_ = " ".join(x for x in (h["os_name"], h["os_version"]) if x)
+        rec = {"name": h["name"], "fqdn": h["fqdn"] or "", "ip": h["ip"] or "", "os": os_, "origin": "agent",
+               "mac": "", "vendor": ""}
+        rows.append(rec)
+        if rec["ip"]:
+            by_ip[rec["ip"]] = rec
+    for d in db.rows(con.execute("SELECT * FROM discovered ORDER BY ip")):
+        name = d.get("manual_name") or d.get("hostname") or ""
+        fam = d.get("manual_family") or d.get("os_family") or ""
+        if d["ip"] in by_ip:
+            rec = by_ip[d["ip"]]
+            rec["mac"], rec["vendor"] = d.get("mac") or "", d.get("vendor") or ""
+            continue
+        if not name:
+            continue
+        rows.append({"name": name, "fqdn": "", "ip": d["ip"], "os": FAM.get(fam, fam), "origin": "scan",
+                     "mac": d.get("mac") or "", "vendor": d.get("vendor") or ""})
+    out = []
+    for r in rows:
+        if key == "name":
+            keys = {r["name"]}
+            if r["fqdn"]:
+                keys.update({r["fqdn"], r["fqdn"].split(".")[0]})
+        else:
+            keys = {r["ip"]} if r["ip"] else set()
+        for k in sorted(x for x in keys if x):
+            out.append([k, r["name"], r["ip"], r["os"], r["origin"], r["mac"], r["vendor"]])
+    return out
+
+
+@route("GET", r"/api/export/inventory\.csv", perm=None, csrf=False)
+def api_export_inventory(req):
+    """CSV для Lookup Tables Graylog (адаптер «DSV File from HTTP»). Доступ по токену из [graylog] export_token."""
+    import csv
+    import hmac
+    import io
+    token = APP.cfg.export_token
+    if not token:
+        raise HTTPError(404, "не найдено")
+    given = req.query.get("token") or req.headers.get("X-HomeRepo-Token") or ""
+    if not hmac.compare_digest(given.encode(), token.encode()):
+        time.sleep(0.5)
+        raise HTTPError(403, "неверный токен")
+    key = req.query.get("key", "ip")
+    if key not in ("ip", "name"):
+        raise HTTPError(400, "key: ip или name")
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    if req.query.get("header", "1") not in ("0", "no", "false"):
+        w.writerow(["key", "name", "ip", "os", "origin", "mac", "vendor"])
+    for r in inventory_rows(C(), key):
+        w.writerow(r)
+    return Resp(200, buf.getvalue().encode("utf-8"), "text/csv; charset=utf-8", [("Cache-Control", "no-store")])
+
+
 @route("GET", "/api/users", perm="admin")
 def api_users(req):
     rows = db.rows(C().execute("SELECT id, name, role, must_change, disabled, created, last_login FROM users "

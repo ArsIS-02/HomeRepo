@@ -1196,8 +1196,14 @@ async function vLog(main) {
       <td class="nowrap ${a.action === 'login_failed' ? 'c-bad' : ''}">${esc(a.label || AUD_RU[a.action] || a.action)}</td><td class="wrap small"${a.detail && a.detail !== a.text ? ` title="${esc(a.detail)}"` : ''}>${esc(a.text != null ? a.text : (a.detail || ''))}</td></tr>`).join('');
     $('#lb', main).innerHTML = body || '<tr><td colspan="5" class="empty">записей нет</td></tr>';
   }
+  let gl = null;
+  if (isAdmin()) { try { gl = await GET('/api/graylog'); } catch (e) { gl = null; } }
+  const glNote = !gl ? '' : gl.enabled
+    ? `<div class="note">Журнал и новые устройства сканера уходят в Graylog: <b>${esc(gl.target)}</b>, отправлено ${gl.sent || 0}, ошибок ${gl.errors || 0}${gl.last_error ? ' (последняя: ' + esc(gl.last_error) + ')' : ''}. Выгрузка инвентаря для справочников: ${gl.export ? 'включена' : 'выключена'}. <button class="btn s" data-act="gltest">тестовое сообщение</button></div>`
+    : '<div class="note">Отправка журнала в Graylog выключена. Чтобы включить, задайте <code>gelf_host</code> в секции <code>[graylog]</code> файла homerepo.conf и перезапустите службы.</div>';
+  S.acts.gltest = async () => { try { await POST('/api/graylog/test'); toast('Тестовое сообщение отправлено'); } catch (e) { fail(e); } };
   main.innerHTML = `<section class="panel"><div class="bar"><b style="font-size:14px;letter-spacing:.1em;color:var(--cyan)">ЖУРНАЛ ДЕЙСТВИЙ</b><div class="grow"></div>
-    <input class="inp" style="flex:0 1 460px" placeholder="Поиск: пользователь, действие, адрес, пакет, устройство" data-in="lq"></div>
+    <input class="inp" style="flex:0 1 460px" placeholder="Поиск: пользователь, действие, адрес, пакет, устройство" data-in="lq"></div>${glNote}
     <div class="tblwrap"><table class="t"><thead><tr><th>Когда</th><th>Кто</th><th>Откуда</th><th>Действие</th><th>Подробности</th></tr></thead><tbody id="lb"></tbody></table></div></section>`;
   let t;
   S.on.lq = (el) => { clearTimeout(t); t = setTimeout(() => { q = el.value; draw().catch(fail); }, 300); };

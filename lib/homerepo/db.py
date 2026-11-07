@@ -328,6 +328,8 @@ def audit(con, user, ip, action, detail=""):
         "INSERT INTO audit(ts, user, ip, action, detail) VALUES(?,?,?,?,?)",
         (time.time(), user, ip, action, detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)),
     )
+    from . import gelf
+    gelf.audit(user, ip, action, detail)
 
 
 def add_job(con, op, params, title, user, worker="signer"):

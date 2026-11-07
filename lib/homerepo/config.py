@@ -44,6 +44,13 @@ DEFAULTS = {
         "forks": "10",
         "timeout_minutes": "120",
     },
+    "graylog": {
+        "gelf_host": "",
+        "gelf_port": "12201",
+        "gelf_proto": "udp",
+        "source": "homerepo",
+        "export_token": "",
+    },
     "paths": {
         "state_dir": "/var/lib/homerepo",
         "web_dir": "",
@@ -109,6 +116,12 @@ class Config:
         self.playbook_cmd = cp.get("ansible", "playbook_cmd")
         self.ansible_forks = cp.getint("ansible", "forks")
         self.ansible_timeout = cp.getint("ansible", "timeout_minutes") * 60
+
+        self.gelf_host = cp.get("graylog", "gelf_host").strip()
+        self.gelf_port = cp.getint("graylog", "gelf_port")
+        self.gelf_proto = cp.get("graylog", "gelf_proto").strip().lower() or "udp"
+        self.gelf_source = cp.get("graylog", "source").strip() or "homerepo"
+        self.export_token = cp.get("graylog", "export_token").strip()
 
         self.state_dir = cp.get("paths", "state_dir")
         self.web_dir = cp.get("paths", "web_dir") or os.path.join(base, "web")

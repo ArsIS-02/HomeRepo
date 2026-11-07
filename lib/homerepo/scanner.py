@@ -18,7 +18,7 @@ import subprocess
 import threading
 import time
 
-from . import auth, db, inventory
+from . import auth, db, inventory, gelf
 from . import web
 from .web import HTTPError, jresp, route
 
@@ -226,6 +226,14 @@ def do_scan(con, j):
     with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
         list(ex.map(enrich, list(found)))
     now = time.time()
+    fresh = []
+    # первое сканирование сети — это перепись, а не «новые устройства»: в Graylog о нём не сообщаем
+    def _in_net(a):
+        try:
+            return ipaddress.ip_address(a) in net
+        except ValueError:
+            return False
+    net_known = any(_in_net(r["ip"]) for r in con.execute("SELECT ip FROM discovered").fetchall())
     with db.tx(con):
         for ip, info in found.items():
             mac = arp.get(ip, "")
@@ -242,6 +250,8 @@ def do_scan(con, j):
                 con.execute("INSERT INTO discovered(ip, mac, vendor, hostname, ports, banner, os_guess, os_family, "
                             "first_seen, last_seen) VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (ip, mac, vendor, info.get("hostname", ""), ports_js, info.get("banner", ""), og, fam, now, now))
+                fresh.append({"ip": ip, "mac": mac, "vendor": vendor, "hostname": info.get("hostname", ""),
+                              "ports": info["ports"], "os_family": fam, "os_guess": og, "network": str(net)})
         # кто был в этой сети раньше, но сейчас не ответил
         for r in con.execute("SELECT ip FROM discovered").fetchall():
             try:
@@ -249,6 +259,8 @@ def do_scan(con, j):
                     con.execute("UPDATE discovered SET alive=0 WHERE ip=?", (r["ip"],))
             except ValueError:
                 pass
+    for dev in fresh if net_known else []:
+        gelf.device_new(dev)
     con.execute("UPDATE jobs SET status='done', progress=NULL, finished=?, message=? WHERE id=?",
                 (time.time(), "%s: найдено устройств %d за %d с" % (net, len(found), time.time() - t0), j["id"]))
 
