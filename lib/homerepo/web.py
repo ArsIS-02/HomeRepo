@@ -1076,12 +1076,12 @@ def api_graylog_test(req):
 VIRTUAL_IFACES = ("podman", "docker", "veth", "virbr", "vnet", "br-", "cni", "lxc", "flannel", "cali", "tun", "wg", "tailscale")
 
 
-def host_addrs(facts):
-    """IPv4 и IPv6 адреса интерфейсов, которые агент прислал в сведениях о системе: без виртуальных
-    интерфейсов контейнеров и VPN, link-local и loopback. Пустой список — сведений нет."""
+def host_addrs(hw):
+    """IPv4 и IPv6 адреса интерфейсов, которые агент прислал в сведениях об оборудовании (hosts.hw):
+    без виртуальных интерфейсов контейнеров и VPN, link-local и loopback. Пустой список — сведений нет."""
     import ipaddress
     try:
-        ifaces = (json.loads(facts) if isinstance(facts, str) else (facts or {})).get("interfaces") or []
+        ifaces = (json.loads(hw) if isinstance(hw, str) else (hw or {})).get("interfaces") or []
     except (ValueError, AttributeError):
         return []
     out = []
@@ -1102,14 +1102,14 @@ def inventory_rows(con, key="ip"):
 
     Колонки: key, name, ip, os, origin, mac, vendor. key — адрес (key=ip) или имя (key=name;
     для агентов строки и по короткому имени, и по FQDN). Данные агента важнее данных сканера.
-    Адрес агента — адреса его интерфейсов из сведений о системе, а не адрес, с которого он
+    Адрес агента — адреса его интерфейсов из сведений об оборудовании, а не адрес, с которого он
     подключился: за NAT или через роутер это адрес роутера, а не устройства.
     """
     from .auditfmt import FAM
     by_ip, rows = {}, []
-    for h in db.rows(con.execute("SELECT name, fqdn, ip, os_name, os_version, facts FROM hosts ORDER BY name")):
+    for h in db.rows(con.execute("SELECT name, fqdn, ip, os_name, os_version, hw FROM hosts ORDER BY name")):
         os_ = " ".join(x for x in (h["os_name"], h["os_version"]) if x)
-        addrs = host_addrs(h.get("facts"))
+        addrs = host_addrs(h.get("hw"))
         if not addrs and h["ip"]:
             addrs = [h["ip"]]
         main = h["ip"] if h["ip"] in addrs else (next((a for a in addrs if ":" not in a), addrs[0]) if addrs else "")

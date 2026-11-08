@@ -55,7 +55,7 @@ class Graylog(unittest.TestCase):
         con.execute("INSERT INTO hosts(name, fqdn, ip, os_name, os_version, secret_hash, enrolled) VALUES(?,?,?,?,?,?,?)",
                     ("redos-server", "redos-server.corp.example", "192.0.2.10", "RED OS", "8.0", "x", now))
         # агент за роутером: подключается с адреса роутера, а его настоящий адрес — в сведениях об интерфейсах
-        con.execute("INSERT INTO hosts(name, fqdn, ip, os_name, os_version, secret_hash, enrolled, facts) VALUES(?,?,?,?,?,?,?,?)",
+        con.execute("INSERT INTO hosts(name, fqdn, ip, os_name, os_version, secret_hash, enrolled, hw) VALUES(?,?,?,?,?,?,?,?)",
                     ("ws-1", "", "192.0.2.1", "RED OS", "8.0", "y", now, json.dumps({"interfaces": [
                         {"name": "eth0", "addr": "192.0.2.45/24", "mac": "aa"}, {"name": "podman0", "addr": "10.88.0.1/16", "mac": ""},
                         {"name": "eth0", "addr": "fe80::1/64", "mac": "aa"}]})))
