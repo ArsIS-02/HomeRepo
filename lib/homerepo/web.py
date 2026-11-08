@@ -1298,9 +1298,10 @@ def main():
     os.umask(0o002)
     cfg = config.get()
     APP = App(cfg)
-    from . import agentapi, ansibleapi, errors, reports, scanner  # noqa: F401  (регистрируют свои маршруты)
+    from . import agentapi, ansibleapi, errors, reports, scanner, watchdog  # noqa: F401  (регистрируют свои маршруты)
 
     threading.Thread(target=fetch_worker, daemon=True, name="fetch").start()
+    threading.Thread(target=watchdog.run_forever, daemon=True, name="watchdog").start()
     fam = socket.AF_INET6 if ":" in cfg.listen else socket.AF_INET
 
     class Server(ThreadingHTTPServer):

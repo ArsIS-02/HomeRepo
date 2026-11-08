@@ -162,6 +162,17 @@ def simple_job(op, params, title):
     return run
 
 
+def cmd_watchdog(a):
+    from . import gelf, watchdog
+    if gelf.sender() is None:
+        print("GELF не настроен ([graylog] gelf_host) — сторожу некуда сообщать", file=sys.stderr)
+        return 1
+    sent, back = watchdog.check(con())
+    gelf.sender().flush()
+    print("проверено: тревог о молчащих %d, возвращений на связь %d" % (sent, back))
+    return 0
+
+
 def cmd_jobs(a):
     c = con()
     for r in c.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (a.n,)).fetchall()[::-1]:
@@ -278,6 +289,7 @@ def main():
         p.add_argument("--no-wait", action="store_true")
     j = sp.add_parser("jobs", help="последние задания")
     j.add_argument("-n", type=int, default=20)
+    sp.add_parser("watchdog", help="разово проверить связь с агентами и сообщить в Graylog о молчащих")
     t = sp.add_parser("token", help="токен подключения устройства")
     t.add_argument("--hours", type=int, default=24)
     t.add_argument("--multi", action="store_true", help="для нескольких хостов")
@@ -312,7 +324,7 @@ def main():
         print(web.repo_file_text())
         return 0
     handlers = {
-        "status": cmd_status, "user": cmd_user, "jobs": cmd_jobs, "token": cmd_token,
+        "status": cmd_status, "user": cmd_user, "jobs": cmd_jobs, "token": cmd_token, "watchdog": cmd_watchdog,
         "inventory": cmd_inventory, "playbook": cmd_playbook,
         "resign": simple_job("resign", {"all_foreign": True}, "переподписать чужие и неподписанные"),
         "rescan": simple_job("rescan", {}, "пересканировать репозиторий"),

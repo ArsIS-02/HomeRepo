@@ -219,3 +219,25 @@ def device_new(dev):
               "hr_mac": dev.get("mac", ""), "hr_vendor": dev.get("vendor", ""), "hr_hostname": dev.get("hostname", ""),
               "hr_ports": [str(p) for p in ports], "hr_os_family": dev.get("os_family", ""), "hr_os_guess": dev.get("os_guess", ""),
               "hr_network": dev.get("network", "")}, 4)
+
+
+def agent_silent(name, ip, silent_seconds, last_seen):
+    """Сторож: агент не выходил на связь дольше суток (см. watchdog)."""
+    s = sender()
+    if not s:
+        return
+    hours = round(silent_seconds / 3600)
+    s.submit("HomeRepo: агент %s молчит %d ч" % (name, hours),
+             {"hr_source": "homerepo", "homelab_app": "homerepo", "hr_event": "agent_silent",
+              "hr_agent_name": name, "hr_ip": ip, "hr_hours_silent": hours,
+              "hr_last_seen": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(last_seen)) if last_seen else ""}, 4)
+
+
+def agent_recovered(name, ip):
+    """Сторож: молчавший агент снова вышел на связь."""
+    s = sender()
+    if not s:
+        return
+    s.submit("HomeRepo: агент %s снова на связи" % name,
+             {"hr_source": "homerepo", "homelab_app": "homerepo", "hr_event": "agent_recovered",
+              "hr_agent_name": name, "hr_ip": ip}, 6)
