@@ -86,6 +86,7 @@ class Graylog(unittest.TestCase):
         self.assertEqual(msgs["login_failed"]["level"], 4)
         self.assertEqual(msgs["login_failed"]["_hr_client_ip"], "198.51.100.7")
         self.assertEqual(msgs["login"]["level"], 6)
+        self.assertNotIn(":  —", msgs["login"]["short_message"])       # у входа нет описания — берётся название действия
         self.assertEqual(msgs["resign_foreign"]["_hr_detail_count"], 1)
         self.assertEqual(msgs["resign_foreign"]["_hr_source"], "homerepo")
         self.assertTrue(msgs["resign_foreign"]["short_message"].startswith("HomeRepo: "))

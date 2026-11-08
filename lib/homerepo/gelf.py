@@ -199,8 +199,8 @@ def audit(user, ip, action, detail=""):
         return
     try:
         try:
-            from .auditfmt import describe
-            text = describe(action, detail, user)
+            from .auditfmt import LABELS, describe
+            text = describe(action, detail, user) or LABELS.get(action) or action
         except Exception:  # noqa: BLE001
             text = action
         s.submit("HomeRepo: %s — %s" % (text, user or "?"), audit_fields(user, ip, action, detail), level_for(action))
