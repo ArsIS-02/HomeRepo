@@ -1129,7 +1129,7 @@ def inventory_rows(con, key="ip"):
             continue
         rows.append({"name": name, "fqdn": "", "ip": d["ip"], "addrs": [d["ip"]], "os": FAM.get(fam, fam), "origin": "scan",
                      "mac": d.get("mac") or "", "vendor": d.get("vendor") or ""})
-    out = []
+    out, seen = [], set()
     for r in rows:
         if key == "name":
             keys = {r["name"]}
@@ -1138,6 +1138,11 @@ def inventory_rows(con, key="ip"):
         else:
             keys = set(r["addrs"])
         for k in sorted(x for x in keys if x):
+            # ключ — один раз: адаптер Graylog «DSV File from HTTP» на повторе бросает загрузку всей таблицы;
+            # строки агентов идут первыми, поэтому при совпадении остаются они
+            if k.lower() in seen:
+                continue
+            seen.add(k.lower())
             out.append([k, r["name"], r["ip"], r["os"], r["origin"], r["mac"], r["vendor"]])
     return out
 

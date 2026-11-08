@@ -64,6 +64,8 @@ class Graylog(unittest.TestCase):
         con.execute("INSERT INTO discovered(ip, mac, vendor, hostname, first_seen, last_seen, os_family, manual_name) "
                     "VALUES(?,?,?,?,?,?,?,?)", ("192.0.2.1", "aa:bb:cc:00:00:02", "Keenetic", "", now, now, "router", "router-1"))
         con.execute("INSERT INTO discovered(ip, first_seen, last_seen) VALUES(?,?,?)", ("192.0.2.99", now, now))
+        for ip in ("192.0.2.130", "192.0.2.131"):        # два устройства с одинаковой подписью
+            con.execute("INSERT INTO discovered(ip, first_seen, last_seen, manual_name) VALUES(?,?,?,?)", (ip, now, now, "Android"))
         con.commit()
         cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
@@ -124,6 +126,8 @@ class Graylog(unittest.TestCase):
         self.assertIn("redos-server.corp.example", keys)
         self.assertIn("redos-server", keys)
         self.assertNotIn("key", keys)
+        self.assertEqual(len(keys), len({k.lower() for k in keys}))         # ключи без повторов — иначе Graylog не загрузит таблицу
+        self.assertEqual(keys.count("Android"), 1)
         self.assertEqual(self.get("/api/export/inventory.csv?token=s3cr3t&key=mac")[0], 400)
 
     def test_export_off_without_token(self):
