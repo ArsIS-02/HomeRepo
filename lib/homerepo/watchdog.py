@@ -1,8 +1,10 @@
 """Сторож связи с агентами: агент молчит дольше суток — предупреждение в Graylog (hr_event=agent_silent).
 
 Фоновый поток службы панели (запускается из web.main) перепроверяет last_poll всех хостов раз в час;
-когда хост вернулся — отправляет hr_event=agent_recovered. Состояние («по кому уже сообщили») лежит
-в settings, схема БД не меняется. Пока хост молчит, тревога повторяется не чаще раза в сутки.
+когда хост вернулся — отправляет hr_event=agent_recovered. Каждый проход отправляет также пульс
+hr_event=heartbeat со счётчиками устройств: по его отсутствию Graylog замечает, что молчит сама панель.
+Состояние («по кому уже сообщили») лежит в settings, схема БД не меняется.
+Пока хост молчит, тревога повторяется не чаще раза в сутки.
 
 Ручной прогон для проверки: homerepo watchdog
 """
@@ -44,6 +46,9 @@ def check(con, now=None):
         if k not in ids:
             del alerted[k]
     db.set_setting(con, _KEY, alerted)
+    silent = sum(1 for h in hosts
+                 if now - (h["last_poll"] or h["enrolled"] or now) > SILENT_AFTER)
+    gelf.heartbeat(len(hosts), silent)   # пульс панели: по его пропаже Graylog видит молчание панели
     return sent, back
 
 

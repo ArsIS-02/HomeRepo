@@ -107,6 +107,20 @@ class Watchdog(unittest.TestCase):
         self.add_host("ws-new", "192.0.2.55", 90000)         # новый id, тишина засчитывается заново
         self.assertEqual(watchdog.check(self.con)[0], 1)
 
+    def test_heartbeat_every_check(self):
+        self.add_host("ws-silent", "192.0.2.51", 90000)
+        self.add_host("ws-ok", "192.0.2.52", 300)
+        watchdog.check(self.con)
+        gelf.sender().flush()
+        beats = [m for m in recv_all(self.sock) if m.get("_hr_event") == "heartbeat"]
+        self.assertEqual(len(beats), 1)                      # ровно один пульс за проход
+        self.assertEqual(beats[0]["_hr_hosts_total"], 2)
+        self.assertEqual(beats[0]["_hr_hosts_silent"], 1)
+        self.assertEqual(beats[0]["level"], 6)
+        watchdog.check(self.con)                             # пульс идёт и при пустом проходе
+        beats = [m for m in recv_all(self.sock) if m.get("_hr_event") == "heartbeat"]
+        self.assertEqual(len(beats), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

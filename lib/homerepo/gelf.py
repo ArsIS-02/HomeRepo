@@ -241,3 +241,14 @@ def agent_recovered(name, ip):
     s.submit("HomeRepo: агент %s снова на связи" % name,
              {"hr_source": "homerepo", "homelab_app": "homerepo", "hr_event": "agent_recovered",
               "hr_agent_name": name, "hr_ip": ip}, 6)
+
+
+def heartbeat(hosts_total, hosts_silent):
+    """Пульс панели: уходит при каждом проходе сторожа (раз в час). По его отсутствию
+    Graylog замечает, что молчит сама панель (алерт «Тишина: HomeRepo»)."""
+    s = sender()
+    if not s:
+        return
+    s.submit("HomeRepo: панель на связи (устройств %d, молчат %d)" % (hosts_total, hosts_silent),
+             {"hr_source": "homerepo", "homelab_app": "homerepo", "hr_event": "heartbeat",
+              "hr_hosts_total": hosts_total, "hr_hosts_silent": hosts_silent}, 6)
