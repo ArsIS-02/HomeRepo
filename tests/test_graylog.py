@@ -54,6 +54,11 @@ class Graylog(unittest.TestCase):
         now = time.time()
         con.execute("INSERT INTO hosts(name, fqdn, ip, os_name, os_version, secret_hash, enrolled) VALUES(?,?,?,?,?,?,?)",
                     ("redos-server", "redos-server.corp.example", "192.0.2.10", "RED OS", "8.0", "x", now))
+        # агент за роутером: подключается с адреса роутера, а его настоящий адрес — в сведениях об интерфейсах
+        con.execute("INSERT INTO hosts(name, fqdn, ip, os_name, os_version, secret_hash, enrolled, facts) VALUES(?,?,?,?,?,?,?,?)",
+                    ("ws-1", "", "192.0.2.1", "RED OS", "8.0", "y", now, json.dumps({"interfaces": [
+                        {"name": "eth0", "addr": "192.0.2.45/24", "mac": "aa"}, {"name": "podman0", "addr": "10.88.0.1/16", "mac": ""},
+                        {"name": "eth0", "addr": "fe80::1/64", "mac": "aa"}]})))
         con.execute("INSERT INTO discovered(ip, mac, vendor, hostname, first_seen, last_seen, os_family) VALUES(?,?,?,?,?,?,?)",
                     ("192.0.2.10", "aa:bb:cc:00:00:01", "Intel", "srv", now, now, "linux"))
         con.execute("INSERT INTO discovered(ip, mac, vendor, hostname, first_seen, last_seen, os_family, manual_name) "
@@ -111,6 +116,9 @@ class Graylog(unittest.TestCase):
         self.assertEqual(by["192.0.2.1"]["name"], "router-1")
         self.assertEqual(by["192.0.2.1"]["origin"], "scan")
         self.assertNotIn("192.0.2.99", by)                                  # без имени — не нужен справочнику
+        self.assertEqual(by["192.0.2.45"]["name"], "ws-1")                 # адрес интерфейса, а не адрес подключения
+        self.assertEqual(by["192.0.2.1"]["name"], "router-1")              # адрес роутера остаётся за роутером
+        self.assertNotIn("10.88.0.1", by)                                   # интерфейсы контейнеров не попадают
         code, text = self.get("/api/export/inventory.csv?token=s3cr3t&key=name&header=0")
         keys = [ln.split(",")[0] for ln in text.splitlines()]
         self.assertIn("redos-server.corp.example", keys)

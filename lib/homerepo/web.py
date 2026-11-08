@@ -1073,21 +1073,51 @@ def api_graylog_test(req):
     return jresp({"ok": True})
 
 
+VIRTUAL_IFACES = ("podman", "docker", "veth", "virbr", "vnet", "br-", "cni", "lxc", "flannel", "cali", "tun", "wg", "tailscale")
+
+
+def host_addrs(facts):
+    """IPv4 и IPv6 адреса интерфейсов, которые агент прислал в сведениях о системе: без виртуальных
+    интерфейсов контейнеров и VPN, link-local и loopback. Пустой список — сведений нет."""
+    import ipaddress
+    try:
+        ifaces = (json.loads(facts) if isinstance(facts, str) else (facts or {})).get("interfaces") or []
+    except (ValueError, AttributeError):
+        return []
+    out = []
+    for itf in ifaces:
+        if str(itf.get("name", "")).startswith(VIRTUAL_IFACES):
+            continue
+        try:
+            ip = ipaddress.ip_interface(str(itf.get("addr", ""))).ip
+        except ValueError:
+            continue
+        if not (ip.is_loopback or ip.is_link_local) and str(ip) not in out:
+            out.append(str(ip))
+    return out
+
+
 def inventory_rows(con, key="ip"):
     """Устройства для справочников Graylog: агенты HomeRepo и найденные сканером.
 
     Колонки: key, name, ip, os, origin, mac, vendor. key — адрес (key=ip) или имя (key=name;
     для агентов строки и по короткому имени, и по FQDN). Данные агента важнее данных сканера.
+    Адрес агента — адреса его интерфейсов из сведений о системе, а не адрес, с которого он
+    подключился: за NAT или через роутер это адрес роутера, а не устройства.
     """
     from .auditfmt import FAM
     by_ip, rows = {}, []
-    for h in db.rows(con.execute("SELECT name, fqdn, ip, os_name, os_version FROM hosts ORDER BY name")):
+    for h in db.rows(con.execute("SELECT name, fqdn, ip, os_name, os_version, facts FROM hosts ORDER BY name")):
         os_ = " ".join(x for x in (h["os_name"], h["os_version"]) if x)
-        rec = {"name": h["name"], "fqdn": h["fqdn"] or "", "ip": h["ip"] or "", "os": os_, "origin": "agent",
+        addrs = host_addrs(h.get("facts"))
+        if not addrs and h["ip"]:
+            addrs = [h["ip"]]
+        main = h["ip"] if h["ip"] in addrs else (next((a for a in addrs if ":" not in a), addrs[0]) if addrs else "")
+        rec = {"name": h["name"], "fqdn": h["fqdn"] or "", "ip": main, "addrs": addrs, "os": os_, "origin": "agent",
                "mac": "", "vendor": ""}
         rows.append(rec)
-        if rec["ip"]:
-            by_ip[rec["ip"]] = rec
+        for a in addrs:
+            by_ip.setdefault(a, rec)
     for d in db.rows(con.execute("SELECT * FROM discovered ORDER BY ip")):
         name = d.get("manual_name") or d.get("hostname") or ""
         fam = d.get("manual_family") or d.get("os_family") or ""
@@ -1097,7 +1127,7 @@ def inventory_rows(con, key="ip"):
             continue
         if not name:
             continue
-        rows.append({"name": name, "fqdn": "", "ip": d["ip"], "os": FAM.get(fam, fam), "origin": "scan",
+        rows.append({"name": name, "fqdn": "", "ip": d["ip"], "addrs": [d["ip"]], "os": FAM.get(fam, fam), "origin": "scan",
                      "mac": d.get("mac") or "", "vendor": d.get("vendor") or ""})
     out = []
     for r in rows:
@@ -1106,7 +1136,7 @@ def inventory_rows(con, key="ip"):
             if r["fqdn"]:
                 keys.update({r["fqdn"], r["fqdn"].split(".")[0]})
         else:
-            keys = {r["ip"]} if r["ip"] else set()
+            keys = set(r["addrs"])
         for k in sorted(x for x in keys if x):
             out.append([k, r["name"], r["ip"], r["os"], r["origin"], r["mac"], r["vendor"]])
     return out
